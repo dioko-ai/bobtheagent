@@ -14,6 +14,7 @@ const FILES_CHANGED_BEGIN: &str = "FILES_CHANGED_BEGIN";
 const FILES_CHANGED_END: &str = "FILES_CHANGED_END";
 const MAX_AUDIT_RETRIES: u8 = 4;
 const MAX_TEST_RETRIES: u8 = 5;
+const MAX_FINAL_AUDIT_RETRIES: u8 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
@@ -209,6 +210,7 @@ pub struct Workflow {
     next_id: u64,
     execution_enabled: bool,
     recent_failures: Vec<WorkflowFailure>,
+    exhausted_final_audits: HashSet<u64>,
 }
 
 impl Default for Workflow {
@@ -222,6 +224,7 @@ impl Default for Workflow {
             next_id: 1,
             execution_enabled: false,
             recent_failures: Vec::new(),
+            exhausted_final_audits: HashSet::new(),
         }
     }
 }
@@ -305,6 +308,7 @@ impl Workflow {
         self.queue.clear();
         self.active = None;
         self.recent_failures.clear();
+        self.exhausted_final_audits.clear();
     }
 
     pub fn sync_planner_tasks_from_file(
@@ -430,6 +434,7 @@ impl Workflow {
         self.queue.clear();
         self.active = None;
         self.recent_failures.clear();
+        self.exhausted_final_audits.clear();
         Ok(entries.len())
     }
 
@@ -636,7 +641,9 @@ impl Workflow {
                     &transcript,
                     success,
                 ));
-                if success {
+                let explicit_pass = success && parse_audit_result_token(&transcript) == Some(true);
+                if explicit_pass {
+                    self.exhausted_final_audits.remove(&final_audit_id);
                     self.set_status(final_audit_id, TaskStatus::Done);
                     messages.push(format!(
                         "System: Final audit task #{} completed on pass {}.",
@@ -644,20 +651,45 @@ impl Workflow {
                     ));
                 } else {
                     self.set_status(final_audit_id, TaskStatus::NeedsChanges);
-                    self.queue.push_back(WorkerJob {
-                        top_task_id: job.top_task_id,
-                        kind: WorkerJobKind::FinalAudit {
-                            final_audit_id,
-                            pass: pass.saturating_add(1),
-                            feedback: Some(format!(
-                                "Previous final audit run failed with code {code}."
-                            )),
-                        },
-                    });
-                    messages.push(format!(
-                        "System: Final audit task #{} failed (code {}); retry queued.",
-                        job.top_task_id, code
-                    ));
+                    let feedback = audit_feedback(&transcript, code, success);
+                    if pass >= MAX_FINAL_AUDIT_RETRIES {
+                        self.exhausted_final_audits.insert(final_audit_id);
+                        self.recent_failures.push(WorkflowFailure {
+                            kind: WorkflowFailureKind::Audit,
+                            top_task_id: job.top_task_id,
+                            top_task_title: self.task_title(job.top_task_id),
+                            attempts: pass,
+                            reason: feedback.clone(),
+                            action_taken: format!(
+                                "Final audit retries exhausted at pass {}; stopped requeueing and awaiting user action.",
+                                pass
+                            ),
+                        });
+                        messages.push(format!(
+                            "System: Final audit task #{} still failed at pass {}. Max retries ({}) reached; no further final-audit retries queued.",
+                            job.top_task_id, pass, MAX_FINAL_AUDIT_RETRIES
+                        ));
+                    } else {
+                        self.queue.push_back(WorkerJob {
+                            top_task_id: job.top_task_id,
+                            kind: WorkerJobKind::FinalAudit {
+                                final_audit_id,
+                                pass: pass.saturating_add(1),
+                                feedback: Some(feedback.clone()),
+                            },
+                        });
+                        messages.push(if success {
+                            format!(
+                                "System: Final audit task #{} did not explicitly pass; retry queued.",
+                                job.top_task_id
+                            )
+                        } else {
+                            format!(
+                                "System: Final audit task #{} failed (code {}); retry queued.",
+                                job.top_task_id, code
+                            )
+                        });
+                    }
                 }
             }
         }
@@ -881,7 +913,12 @@ impl Workflow {
                  Rolling task context:\n{}\n\
                  Current task tree:\n{}\n\
                  {}\n\
-                 If no issues, explicitly say 'No issues found'. Otherwise list concrete issues and fixes.",
+                 Response protocol (required):\n\
+                 - First line must be exactly one of:\n\
+                   AUDIT_RESULT: PASS\n\
+                   AUDIT_RESULT: FAIL\n\
+                 - Then provide concise findings. If PASS, include a brief rationale.\n\
+                 - If FAIL, include concrete issues and suggested fixes.",
                     self.context_block(),
                     self.task_tree_compact(),
                     feedback
@@ -1202,6 +1239,9 @@ impl Workflow {
                 if top.kind != TaskKind::FinalAudit || top.status == TaskStatus::Done {
                     continue;
                 }
+                if self.exhausted_final_audits.contains(&top_id) {
+                    continue;
+                }
                 if self.final_audit_has_active_or_queued(top_id) {
                     continue;
                 }
@@ -1391,14 +1431,14 @@ impl Workflow {
             let impl_done = top
                 .children
                 .iter()
-                .find(|child| child.kind == TaskKind::Implementor)
-                .is_some_and(|node| node.status == TaskStatus::Done);
+                .filter(|child| child.kind == TaskKind::Implementor)
+                .all(|node| node.status == TaskStatus::Done);
             let requires_test_writer = top.children.iter().any(|c| c.kind == TaskKind::TestWriter);
             let test_done = if requires_test_writer {
                 top.children
                     .iter()
-                    .find(|child| child.kind == TaskKind::TestWriter)
-                    .is_some_and(|node| node.status == TaskStatus::Done)
+                    .filter(|child| child.kind == TaskKind::TestWriter)
+                    .all(|node| node.status == TaskStatus::Done)
             } else {
                 true
             };

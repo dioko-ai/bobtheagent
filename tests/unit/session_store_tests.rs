@@ -163,6 +163,29 @@ fn open_existing_supports_rolling_context_round_trip() {
 }
 
 #[test]
+fn create_unique_session_dir_avoids_same_second_workspace_collision() {
+    let base = std::env::temp_dir().join(format!(
+        "metaagent-session-unique-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should work")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&base).expect("base dir");
+
+    let first = create_unique_session_dir(&base, 42, "workspace").expect("first dir");
+    let second = create_unique_session_dir(&base, 42, "workspace").expect("second dir");
+
+    assert_ne!(first, second);
+    assert!(first.ends_with("42-workspace"));
+    assert!(second.ends_with("42-workspace-1"));
+    assert!(first.is_dir());
+    assert!(second.is_dir());
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
 fn task_fails_round_trip_append() {
     let base = std::env::temp_dir().join(format!(
         "metaagent-session-fails-{}",

@@ -64,12 +64,12 @@ impl TestRunnerAdapter {
             Self::spawn_run(config, tx);
         } else {
             let _ = tx.send(AgentEvent::System(
-                "Deterministic test runner skipped: no test command configured in meta.json."
+                "Deterministic test runner failed: no test command configured in meta.json."
                     .to_string(),
             ));
             let _ = tx.send(AgentEvent::Completed {
-                success: true,
-                code: 0,
+                success: false,
+                code: -2,
             });
         }
     }

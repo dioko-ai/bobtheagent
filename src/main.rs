@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -53,6 +53,7 @@ enum SilentMasterCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SubmitBlockReason {
     ProjectInfoGathering,
+    MasterBusy,
     TaskCheck,
 }
 
@@ -255,6 +256,8 @@ fn run_app(
     let test_runner_adapter = TestRunnerAdapter::new();
     let mut master_transcript: Vec<String> = Vec::new();
     let mut master_report_transcript: Vec<String> = Vec::new();
+    let mut master_report_in_flight = false;
+    let mut pending_master_report_prompts: VecDeque<String> = VecDeque::new();
     let mut project_info_transcript: Vec<String> = Vec::new();
     let mut pending_task_write_baseline: Option<PendingTaskWriteBaseline> = None;
     let mut task_file_fix_retry_count: u8 = 0;
@@ -485,14 +488,20 @@ fn run_app(
                     let new_context_entries = app.on_worker_completed(success, code);
                     let exhausted_failures = app.drain_worker_failures();
                     if !exhausted_failures.is_empty() {
-                        handle_exhausted_loop_failures(
+                        if let Some(prompt) = handle_exhausted_loop_failures(
                             &mut app,
                             active_session,
-                            &master_report_adapter,
                             &mut master_report_session_intro_needed,
                             project_info_text.as_deref(),
                             exhausted_failures,
-                        );
+                        ) && let Some(prompt_to_send) = enqueue_or_dispatch_master_report_prompt(
+                            prompt,
+                            &mut master_report_in_flight,
+                            &mut pending_master_report_prompts,
+                        ) {
+                            master_report_transcript.clear();
+                            master_report_adapter.send_prompt(prompt_to_send);
+                        }
                     }
                     if !new_context_entries.is_empty() {
                         if let Err(err) =
@@ -503,15 +512,21 @@ fn run_app(
                             ));
                         }
                         let prompt = app.prepare_context_report_prompt(&new_context_entries);
-                        master_report_adapter.send_prompt(
-                            subagents::build_session_intro_if_needed(
-                                &prompt,
-                                active_session.session_dir().display().to_string().as_str(),
-                                &active_session.session_meta_file().display().to_string(),
-                                project_info_text.as_deref(),
-                                &mut master_report_session_intro_needed,
-                            ),
+                        let prompt = subagents::build_session_intro_if_needed(
+                            &prompt,
+                            active_session.session_dir().display().to_string().as_str(),
+                            &active_session.session_meta_file().display().to_string(),
+                            project_info_text.as_deref(),
+                            &mut master_report_session_intro_needed,
                         );
+                        if let Some(prompt_to_send) = enqueue_or_dispatch_master_report_prompt(
+                            prompt,
+                            &mut master_report_in_flight,
+                            &mut pending_master_report_prompts,
+                        ) {
+                            master_report_transcript.clear();
+                            master_report_adapter.send_prompt(prompt_to_send);
+                        }
                     }
                     start_next_worker_job_if_any(
                         &mut app,
@@ -545,14 +560,20 @@ fn run_app(
                     let new_context_entries = app.on_worker_completed(success, code);
                     let exhausted_failures = app.drain_worker_failures();
                     if !exhausted_failures.is_empty() {
-                        handle_exhausted_loop_failures(
+                        if let Some(prompt) = handle_exhausted_loop_failures(
                             &mut app,
                             active_session,
-                            &master_report_adapter,
                             &mut master_report_session_intro_needed,
                             project_info_text.as_deref(),
                             exhausted_failures,
-                        );
+                        ) && let Some(prompt_to_send) = enqueue_or_dispatch_master_report_prompt(
+                            prompt,
+                            &mut master_report_in_flight,
+                            &mut pending_master_report_prompts,
+                        ) {
+                            master_report_transcript.clear();
+                            master_report_adapter.send_prompt(prompt_to_send);
+                        }
                     }
                     if !new_context_entries.is_empty() {
                         if let Err(err) =
@@ -563,15 +584,21 @@ fn run_app(
                             ));
                         }
                         let prompt = app.prepare_context_report_prompt(&new_context_entries);
-                        master_report_adapter.send_prompt(
-                            subagents::build_session_intro_if_needed(
-                                &prompt,
-                                active_session.session_dir().display().to_string().as_str(),
-                                &active_session.session_meta_file().display().to_string(),
-                                project_info_text.as_deref(),
-                                &mut master_report_session_intro_needed,
-                            ),
+                        let prompt = subagents::build_session_intro_if_needed(
+                            &prompt,
+                            active_session.session_dir().display().to_string().as_str(),
+                            &active_session.session_meta_file().display().to_string(),
+                            project_info_text.as_deref(),
+                            &mut master_report_session_intro_needed,
                         );
+                        if let Some(prompt_to_send) = enqueue_or_dispatch_master_report_prompt(
+                            prompt,
+                            &mut master_report_in_flight,
+                            &mut pending_master_report_prompts,
+                        ) {
+                            master_report_transcript.clear();
+                            master_report_adapter.send_prompt(prompt_to_send);
+                        }
                     }
                     start_next_worker_job_if_any(
                         &mut app,
@@ -603,6 +630,13 @@ fn run_app(
                         });
                     app.push_agent_message(format!("Agent: {summary}"));
                     master_report_transcript.clear();
+                    if let Some(prompt_to_send) = complete_and_next_master_report_prompt(
+                        &mut master_report_in_flight,
+                        &mut pending_master_report_prompts,
+                    ) {
+                        master_report_transcript.clear();
+                        master_report_adapter.send_prompt(prompt_to_send);
+                    }
                     chat_updated = true;
                 }
             }
@@ -1010,6 +1044,9 @@ fn run_app(
                             &mut project_info_text,
                             terminal,
                         )?;
+                        master_report_in_flight = false;
+                        pending_master_report_prompts.clear();
+                        master_report_transcript.clear();
                         task_check_in_flight = false;
                         task_check_baseline = None;
                     }
@@ -1017,12 +1054,19 @@ fn run_app(
                     let pending = app.chat_input().trim().to_string();
                     match submit_block_reason(
                         project_info_in_flight,
+                        app.is_master_in_progress(),
                         app.is_task_check_in_progress(),
                         &pending,
                     ) {
                         Some(SubmitBlockReason::ProjectInfoGathering) => {
                             app.push_agent_message(
                                 "System: Project context gathering is in progress. Enter/Return submissions are temporarily disabled until it completes.".to_string(),
+                            );
+                            continue;
+                        }
+                        Some(SubmitBlockReason::MasterBusy) => {
+                            app.push_agent_message(
+                                "System: Master is still processing your previous request. Enter/Return submissions are temporarily disabled until it completes.".to_string(),
                             );
                             continue;
                         }
@@ -1161,6 +1205,18 @@ fn submit_user_message(
     project_info_text: &mut Option<String>,
     model_routing: &CodexAgentModelRouting,
 ) -> io::Result<()> {
+    if should_send_to_master(&message) && app.is_master_in_progress() {
+        app.push_agent_message(
+            "System: Master is still processing your previous request. Please wait for completion before sending another message."
+                .to_string(),
+        );
+        let size = terminal.size()?;
+        let screen = Rect::new(0, 0, size.width, size.height);
+        let max_scroll = ui::chat_max_scroll(screen, app);
+        app.set_chat_scroll(max_scroll);
+        return Ok(());
+    }
+
     initialize_session_for_message_if_needed(app, &message, cwd, session_store, project_info_text)?;
 
     if command_requires_active_session(&message) && session_store.is_none() {
@@ -1575,8 +1631,31 @@ fn handle_final_audit_command(
     session_store: &SessionStore,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> io::Result<bool> {
+    if handle_final_audit_tasks_command(app, message, session_store)? {
+        let size = terminal.size()?;
+        let screen = Rect::new(0, 0, size.width, size.height);
+        let max_scroll = ui::chat_max_scroll(screen, app);
+        app.set_chat_scroll(max_scroll);
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn handle_final_audit_tasks_command(
+    app: &mut App,
+    message: &str,
+    session_store: &SessionStore,
+) -> io::Result<bool> {
     if App::is_add_final_audit_command(message) {
-        let mut tasks = session_store.read_tasks().unwrap_or_default();
+        let mut tasks = match session_store.read_tasks() {
+            Ok(tasks) => tasks,
+            Err(err) => {
+                app.push_agent_message(format!(
+                    "System: Could not read tasks file; final audit command aborted: {err}"
+                ));
+                return Ok(true);
+            }
+        };
         ensure_final_audit_task(&mut tasks);
         normalize_root_orders_with_final_last(&mut tasks);
         let text = serde_json::to_string_pretty(&tasks).map_err(io::Error::other)?;
@@ -1587,23 +1666,30 @@ fn handle_final_audit_command(
                 "System: Final audit task was written, but refresh failed: {err}"
             )),
         }
-        let size = terminal.size()?;
-        let screen = Rect::new(0, 0, size.width, size.height);
-        let max_scroll = ui::chat_max_scroll(screen, app);
-        app.set_chat_scroll(max_scroll);
         return Ok(true);
     }
 
     if App::is_remove_final_audit_command(message) {
-        let mut tasks = session_store.read_tasks().unwrap_or_default();
-        let before = tasks.len();
+        let mut tasks = match session_store.read_tasks() {
+            Ok(tasks) => tasks,
+            Err(err) => {
+                app.push_agent_message(format!(
+                    "System: Could not read tasks file; final audit command aborted: {err}"
+                ));
+                return Ok(true);
+            }
+        };
+        let final_audit_count = tasks
+            .iter()
+            .filter(|task| task.kind == PlannerTaskKindFile::FinalAudit)
+            .count();
         tasks.retain(|task| task.kind != PlannerTaskKindFile::FinalAudit);
         normalize_root_orders_with_final_last(&mut tasks);
         let text = serde_json::to_string_pretty(&tasks).map_err(io::Error::other)?;
         std::fs::write(session_store.tasks_file(), text)?;
         match app.sync_planner_tasks_from_file(tasks) {
             Ok(_) => {
-                if before == 0 {
+                if final_audit_count == 0 {
                     app.push_agent_message("System: No final audit task was present.".to_string());
                 } else {
                     app.push_agent_message("System: Removed final audit task.".to_string());
@@ -1613,12 +1699,9 @@ fn handle_final_audit_command(
                 "System: Final audit removal was written, but refresh failed: {err}"
             )),
         }
-        let size = terminal.size()?;
-        let screen = Rect::new(0, 0, size.width, size.height);
-        let max_scroll = ui::chat_max_scroll(screen, app);
-        app.set_chat_scroll(max_scroll);
         return Ok(true);
     }
+
     Ok(false)
 }
 
@@ -1725,11 +1808,10 @@ fn sanitize_master_docs_fields(
 fn handle_exhausted_loop_failures(
     app: &mut App,
     session_store: &SessionStore,
-    master_report_adapter: &CodexAdapter,
     master_report_session_intro_needed: &mut bool,
     project_info_text: Option<&str>,
     failures: Vec<WorkflowFailure>,
-) {
+) -> Option<String> {
     let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -1752,7 +1834,7 @@ fn handle_exhausted_loop_failures(
 
     if let Err(err) = session_store.append_task_fails(&fail_entries) {
         app.push_agent_message(format!("System: Failed to append task-fails.json: {err}"));
-        return;
+        return None;
     }
 
     let has_test_failure = fail_entries.iter().any(|entry| entry.kind == "test");
@@ -1761,13 +1843,13 @@ fn handle_exhausted_loop_failures(
         &fail_entries,
         has_test_failure,
     );
-    master_report_adapter.send_prompt(subagents::build_session_intro_if_needed(
+    Some(subagents::build_session_intro_if_needed(
         &prompt,
         session_store.session_dir().display().to_string().as_str(),
         &session_store.session_meta_file().display().to_string(),
         project_info_text,
         master_report_session_intro_needed,
-    ));
+    ))
 }
 
 fn persist_runtime_tasks_snapshot(app: &App, session_store: &SessionStore) -> io::Result<()> {
@@ -1875,16 +1957,47 @@ fn is_allowed_during_task_check(message: &str) -> bool {
 
 fn submit_block_reason(
     project_info_in_flight: bool,
+    master_in_progress: bool,
     task_check_in_progress: bool,
     message: &str,
 ) -> Option<SubmitBlockReason> {
     if project_info_in_flight {
         return Some(SubmitBlockReason::ProjectInfoGathering);
     }
+    if master_in_progress {
+        return Some(SubmitBlockReason::MasterBusy);
+    }
     if task_check_in_progress && !is_allowed_during_task_check(message) {
         return Some(SubmitBlockReason::TaskCheck);
     }
     None
+}
+
+fn enqueue_or_dispatch_master_report_prompt(
+    prompt: String,
+    master_report_in_flight: &mut bool,
+    pending_master_report_prompts: &mut VecDeque<String>,
+) -> Option<String> {
+    if *master_report_in_flight {
+        pending_master_report_prompts.push_back(prompt);
+        None
+    } else {
+        *master_report_in_flight = true;
+        Some(prompt)
+    }
+}
+
+fn complete_and_next_master_report_prompt(
+    master_report_in_flight: &mut bool,
+    pending_master_report_prompts: &mut VecDeque<String>,
+) -> Option<String> {
+    if let Some(next_prompt) = pending_master_report_prompts.pop_front() {
+        *master_report_in_flight = true;
+        Some(next_prompt)
+    } else {
+        *master_report_in_flight = false;
+        None
+    }
 }
 
 fn should_start_task_check(

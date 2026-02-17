@@ -195,15 +195,52 @@ fn task_check_allows_only_quit_commands() {
 #[test]
 fn submit_block_reason_prioritizes_project_info_and_respects_task_check_quit_escape() {
     assert_eq!(
-        submit_block_reason(true, true, "/quit"),
+        submit_block_reason(true, false, true, "/quit"),
         Some(SubmitBlockReason::ProjectInfoGathering)
     );
     assert_eq!(
-        submit_block_reason(false, true, "hello"),
+        submit_block_reason(false, false, true, "hello"),
         Some(SubmitBlockReason::TaskCheck)
     );
-    assert_eq!(submit_block_reason(false, true, "/quit"), None);
-    assert_eq!(submit_block_reason(false, false, "hello"), None);
+    assert_eq!(
+        submit_block_reason(false, true, false, "hello"),
+        Some(SubmitBlockReason::MasterBusy)
+    );
+    assert_eq!(submit_block_reason(false, false, true, "/quit"), None);
+    assert_eq!(submit_block_reason(false, false, false, "hello"), None);
+}
+
+#[test]
+fn master_report_prompt_queue_serializes_dispatch() {
+    let mut in_flight = false;
+    let mut queue = std::collections::VecDeque::new();
+
+    let first = enqueue_or_dispatch_master_report_prompt(
+        "first".to_string(),
+        &mut in_flight,
+        &mut queue,
+    );
+    assert_eq!(first.as_deref(), Some("first"));
+    assert!(in_flight);
+    assert!(queue.is_empty());
+
+    let second = enqueue_or_dispatch_master_report_prompt(
+        "second".to_string(),
+        &mut in_flight,
+        &mut queue,
+    );
+    assert!(second.is_none());
+    assert!(in_flight);
+    assert_eq!(queue.len(), 1);
+
+    let next = complete_and_next_master_report_prompt(&mut in_flight, &mut queue);
+    assert_eq!(next.as_deref(), Some("second"));
+    assert!(in_flight);
+    assert!(queue.is_empty());
+
+    let done = complete_and_next_master_report_prompt(&mut in_flight, &mut queue);
+    assert!(done.is_none());
+    assert!(!in_flight);
 }
 
 #[test]
@@ -937,4 +974,83 @@ fn normalize_root_orders_with_final_last_places_final_at_end() {
         .and_then(|t| t.order)
         .expect("task order");
     assert!(final_order > task_order);
+}
+
+#[test]
+fn add_final_audit_aborts_without_writing_when_tasks_read_fails() {
+    let (store, session_dir) = open_temp_store("final-audit-read-fail-add");
+    std::fs::remove_file(store.tasks_file()).expect("remove tasks file");
+
+    let mut app = App::default();
+    let handled = handle_final_audit_tasks_command(&mut app, "/add-final-audit", &store)
+        .expect("command should not error");
+    assert!(handled);
+    assert!(
+        !store.tasks_file().exists(),
+        "command should not recreate tasks file on read failure"
+    );
+    let last = app
+        .left_bottom_lines()
+        .last()
+        .expect("expected user-visible error");
+    assert!(last.contains("Could not read tasks file"));
+    assert!(last.contains("final audit command aborted"));
+
+    std::fs::remove_dir_all(session_dir).ok();
+}
+
+#[test]
+fn remove_final_audit_does_not_overwrite_malformed_tasks_json() {
+    let (store, session_dir) = open_temp_store("final-audit-read-fail-remove");
+    std::fs::write(store.tasks_file(), "{ invalid json").expect("write malformed tasks.json");
+    let before = std::fs::read_to_string(store.tasks_file()).expect("read malformed tasks.json");
+
+    let mut app = App::default();
+    let handled = handle_final_audit_tasks_command(&mut app, "/remove-final-audit", &store)
+        .expect("command should not error");
+    assert!(handled);
+
+    let after = std::fs::read_to_string(store.tasks_file()).expect("read tasks after command");
+    assert_eq!(
+        after, before,
+        "command should not rewrite tasks.json when parsing fails"
+    );
+    let last = app
+        .left_bottom_lines()
+        .last()
+        .expect("expected user-visible error");
+    assert!(last.contains("Could not read tasks file"));
+    assert!(last.contains("final audit command aborted"));
+
+    std::fs::remove_dir_all(session_dir).ok();
+}
+
+#[test]
+fn remove_final_audit_reports_not_present_when_only_non_final_tasks_exist() {
+    let (store, session_dir) = open_temp_store("final-audit-not-present-remove");
+    let tasks = vec![PlannerTaskFileEntry {
+        id: "task-1".to_string(),
+        title: "Task".to_string(),
+        details: "details".to_string(),
+        docs: Vec::new(),
+        kind: PlannerTaskKindFile::Task,
+        status: PlannerTaskStatusFile::Pending,
+        parent_id: None,
+        order: Some(0),
+    }];
+    let tasks_json = serde_json::to_string_pretty(&tasks).expect("serialize tasks");
+    std::fs::write(store.tasks_file(), tasks_json).expect("write tasks");
+
+    let mut app = App::default();
+    let handled = handle_final_audit_tasks_command(&mut app, "/remove-final-audit", &store)
+        .expect("command should not error");
+    assert!(handled);
+
+    let last = app
+        .left_bottom_lines()
+        .last()
+        .expect("expected status message");
+    assert_eq!(last, "System: No final audit task was present.");
+
+    std::fs::remove_dir_all(session_dir).ok();
 }

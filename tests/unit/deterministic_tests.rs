@@ -165,34 +165,34 @@ fn deterministic_runner_runs_explicit_command_string() {
 }
 
 #[test]
-fn deterministic_runner_skips_with_success_when_command_missing() {
+fn deterministic_runner_fails_when_command_missing() {
     let runner = TestRunnerAdapter::new();
     runner.run_tests_with_command(None);
 
     let deadline = Instant::now() + Duration::from_secs(2);
-    let mut saw_skip_message = false;
+    let mut saw_missing_command_message = false;
     let mut saw_completed = false;
     while Instant::now() < deadline {
         for event in runner.drain_events() {
             match event {
-                AgentEvent::System(line) if line.contains("skipped") => {
-                    saw_skip_message = true;
+                AgentEvent::System(line) if line.contains("no test command configured") => {
+                    saw_missing_command_message = true;
                 }
                 AgentEvent::Completed { success, code } => {
-                    assert!(success);
-                    assert_eq!(code, 0);
+                    assert!(!success);
+                    assert_eq!(code, -2);
                     saw_completed = true;
                 }
                 AgentEvent::Output(_) | AgentEvent::System(_) => {}
             }
         }
-        if saw_skip_message && saw_completed {
+        if saw_missing_command_message && saw_completed {
             break;
         }
         thread::sleep(Duration::from_millis(10));
     }
 
-    assert!(saw_skip_message);
+    assert!(saw_missing_command_message);
     assert!(saw_completed);
 }
 

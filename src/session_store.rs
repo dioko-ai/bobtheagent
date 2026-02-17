@@ -159,8 +159,7 @@ impl SessionStore {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let session_dir = root_dir.join(format!("{now_secs}-{workspace_name}"));
-        fs::create_dir_all(&session_dir)?;
+        let session_dir = create_unique_session_dir(&root_dir, now_secs, workspace_name)?;
 
         let store = Self {
             tasks_file: session_dir.join("tasks.json"),
@@ -328,6 +327,30 @@ impl SessionStore {
         let text = serde_json::to_string_pretty(&metadata).map_err(io::Error::other)?;
         fs::write(&self.metadata_file, text)
     }
+}
+
+fn create_unique_session_dir(
+    root_dir: &Path,
+    now_secs: u64,
+    workspace_name: &str,
+) -> io::Result<PathBuf> {
+    let base_name = format!("{now_secs}-{workspace_name}");
+    for suffix in 0..10_000u32 {
+        let candidate = if suffix == 0 {
+            root_dir.join(&base_name)
+        } else {
+            root_dir.join(format!("{base_name}-{suffix}"))
+        };
+        match fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "failed to allocate unique session directory",
+    ))
 }
 
 fn read_metadata_file(path: &Path) -> io::Result<SessionMetadata> {

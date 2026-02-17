@@ -162,6 +162,101 @@ fn seed_two_default_tasks(wf: &mut Workflow, first_title: &str, second_title: &s
     .expect("seed plan should sync");
 }
 
+fn seed_single_default_task_with_final_audit(wf: &mut Workflow, title: &str) {
+    wf.sync_planner_tasks_from_file(vec![
+        PlannerTaskFileEntry {
+            id: "top".to_string(),
+            title: title.to_string(),
+            details: "top details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Task,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: None,
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "impl".to_string(),
+            title: "Implementation".to_string(),
+            details: "implementor details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Implementor,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("top".to_string()),
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "impl-audit".to_string(),
+            title: "Audit".to_string(),
+            details: "audit details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Auditor,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("impl".to_string()),
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "tw".to_string(),
+            title: "Write tests".to_string(),
+            details: "test writer details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::TestWriter,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("top".to_string()),
+            order: Some(1),
+        },
+        PlannerTaskFileEntry {
+            id: "tw-runner".to_string(),
+            title: "Run tests".to_string(),
+            details: "test runner details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::TestRunner,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("tw".to_string()),
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "fa".to_string(),
+            title: "Final Audit".to_string(),
+            details: "final audit details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::FinalAudit,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: None,
+            order: Some(1),
+        },
+    ])
+    .expect("seed plan should sync");
+}
+
+fn complete_non_final_branches_and_start_final_audit(wf: &mut Workflow) -> StartedJob {
+    wf.start_execution();
+
+    let implementor = wf.start_next_job().expect("implementor");
+    assert_eq!(implementor.role, WorkerRole::Implementor);
+    wf.append_active_output("implemented".to_string());
+    wf.finish_active_job(true, 0);
+
+    let test_writer = wf.start_next_job().expect("test writer");
+    assert_eq!(test_writer.role, WorkerRole::TestWriter);
+    wf.append_active_output("wrote tests".to_string());
+    wf.finish_active_job(true, 0);
+
+    let auditor = wf.start_next_job().expect("auditor");
+    assert_eq!(auditor.role, WorkerRole::Auditor);
+    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
+    wf.append_active_output("No issues found".to_string());
+    wf.finish_active_job(true, 0);
+
+    let runner = wf.start_next_job().expect("test runner");
+    assert_eq!(runner.role, WorkerRole::TestRunner);
+    wf.append_active_output("all passed".to_string());
+    wf.finish_active_job(true, 0);
+
+    let final_audit = wf.start_next_job().expect("final audit");
+    assert_eq!(final_audit.role, WorkerRole::FinalAudit);
+    final_audit
+}
+
 #[test]
 fn syncs_planner_tasks_from_file_entries() {
     let mut wf = Workflow::default();
@@ -296,6 +391,203 @@ fn execution_queues_implementor_and_test_writer_jobs() {
 }
 
 #[test]
+fn top_task_does_not_complete_until_all_implementor_branches_are_done() {
+    let mut wf = Workflow::default();
+    wf.sync_planner_tasks_from_file(vec![
+        PlannerTaskFileEntry {
+            id: "top".to_string(),
+            title: "Top".to_string(),
+            details: "top details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Task,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: None,
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "impl-1".to_string(),
+            title: "Impl 1".to_string(),
+            details: "impl 1 details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Implementor,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("top".to_string()),
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "impl-1-audit".to_string(),
+            title: "Impl 1 audit".to_string(),
+            details: "impl 1 audit details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Auditor,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("impl-1".to_string()),
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "impl-2".to_string(),
+            title: "Impl 2".to_string(),
+            details: "impl 2 details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Implementor,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("top".to_string()),
+            order: Some(1),
+        },
+        PlannerTaskFileEntry {
+            id: "impl-2-audit".to_string(),
+            title: "Impl 2 audit".to_string(),
+            details: "impl 2 audit details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Auditor,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("impl-2".to_string()),
+            order: Some(0),
+        },
+    ])
+    .expect("sync should succeed");
+
+    wf.start_execution();
+
+    let implementor = wf.start_next_job().expect("implementor");
+    assert_eq!(implementor.role, WorkerRole::Implementor);
+    wf.append_active_output("implemented".to_string());
+    wf.finish_active_job(true, 0);
+
+    let auditor = wf.start_next_job().expect("auditor");
+    assert_eq!(auditor.role, WorkerRole::Auditor);
+    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
+    wf.append_active_output("No issues found".to_string());
+    wf.finish_active_job(true, 0);
+
+    let snapshot = wf.planner_tasks_for_file();
+    let top_status = snapshot
+        .iter()
+        .find(|entry| entry.id == "top")
+        .map(|entry| entry.status);
+    let impl_1_status = snapshot
+        .iter()
+        .find(|entry| entry.id == "impl-1")
+        .map(|entry| entry.status);
+    let impl_2_status = snapshot
+        .iter()
+        .find(|entry| entry.id == "impl-2")
+        .map(|entry| entry.status);
+
+    assert_ne!(top_status, Some(PlannerTaskStatusFile::Done));
+    assert_eq!(impl_1_status, Some(PlannerTaskStatusFile::Done));
+    assert_ne!(impl_2_status, Some(PlannerTaskStatusFile::Done));
+}
+
+#[test]
+fn top_task_does_not_complete_until_all_test_writer_branches_are_done() {
+    let mut wf = Workflow::default();
+    wf.sync_planner_tasks_from_file(vec![
+        PlannerTaskFileEntry {
+            id: "top".to_string(),
+            title: "Top".to_string(),
+            details: "top details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Task,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: None,
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "impl".to_string(),
+            title: "Impl".to_string(),
+            details: "impl details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Implementor,
+            status: PlannerTaskStatusFile::Done,
+            parent_id: Some("top".to_string()),
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "impl-audit".to_string(),
+            title: "Impl audit".to_string(),
+            details: "impl audit details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Auditor,
+            status: PlannerTaskStatusFile::Done,
+            parent_id: Some("impl".to_string()),
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "tw-1".to_string(),
+            title: "Write tests 1".to_string(),
+            details: "tw 1 details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::TestWriter,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("top".to_string()),
+            order: Some(1),
+        },
+        PlannerTaskFileEntry {
+            id: "tw-1-runner".to_string(),
+            title: "Run tests 1".to_string(),
+            details: "runner 1 details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::TestRunner,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("tw-1".to_string()),
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "tw-2".to_string(),
+            title: "Write tests 2".to_string(),
+            details: "tw 2 details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::TestWriter,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("top".to_string()),
+            order: Some(2),
+        },
+        PlannerTaskFileEntry {
+            id: "tw-2-runner".to_string(),
+            title: "Run tests 2".to_string(),
+            details: "runner 2 details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::TestRunner,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("tw-2".to_string()),
+            order: Some(0),
+        },
+    ])
+    .expect("sync should succeed");
+
+    wf.start_execution();
+
+    let test_writer = wf.start_next_job().expect("test writer");
+    assert_eq!(test_writer.role, WorkerRole::TestWriter);
+    wf.append_active_output("wrote tests".to_string());
+    wf.finish_active_job(true, 0);
+
+    let test_runner = wf.start_next_job().expect("test runner");
+    assert_eq!(test_runner.role, WorkerRole::TestRunner);
+    wf.append_active_output("all passed".to_string());
+    wf.finish_active_job(true, 0);
+
+    let snapshot = wf.planner_tasks_for_file();
+    let top_status = snapshot
+        .iter()
+        .find(|entry| entry.id == "top")
+        .map(|entry| entry.status);
+    let tw_1_status = snapshot
+        .iter()
+        .find(|entry| entry.id == "tw-1")
+        .map(|entry| entry.status);
+    let tw_2_status = snapshot
+        .iter()
+        .find(|entry| entry.id == "tw-2")
+        .map(|entry| entry.status);
+
+    assert_ne!(top_status, Some(PlannerTaskStatusFile::Done));
+    assert_eq!(tw_1_status, Some(PlannerTaskStatusFile::Done));
+    assert_ne!(tw_2_status, Some(PlannerTaskStatusFile::Done));
+}
+
+#[test]
 fn top_level_tasks_run_sequentially_in_order() {
     let mut wf = Workflow::default();
     seed_two_default_tasks(&mut wf, "Task One", "Task Two");
@@ -381,6 +673,44 @@ fn deterministic_test_runner_loops_back_to_test_writer_on_failure() {
         }
         JobRun::DeterministicTestRun => panic!("expected agent prompt"),
     }
+}
+
+#[test]
+fn missing_test_command_keeps_required_test_runner_branch_incomplete() {
+    let mut wf = Workflow::default();
+    seed_single_default_task(&mut wf, "Do work");
+    wf.start_execution();
+
+    let _ = wf.start_next_job().expect("implementor");
+    wf.append_active_output("implemented".to_string());
+    wf.finish_active_job(true, 0);
+
+    let _ = wf.start_next_job().expect("test writer");
+    wf.append_active_output("wrote tests".to_string());
+    wf.finish_active_job(true, 0);
+
+    let auditor = wf.start_next_job().expect("auditor");
+    assert_eq!(auditor.role, WorkerRole::Auditor);
+    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
+    wf.append_active_output("No issues found".to_string());
+    wf.finish_active_job(true, 0);
+
+    let runner = wf.start_next_job().expect("test runner");
+    assert_eq!(runner.role, WorkerRole::TestRunner);
+    wf.append_active_output(
+        "Deterministic test runner failed: no test command configured in meta.json.".to_string(),
+    );
+    let messages = wf.finish_active_job(false, -2);
+    assert!(messages.iter().any(|m| m.contains("tests failed")));
+
+    let retry = wf.start_next_job().expect("test writer retry");
+    assert_eq!(retry.role, WorkerRole::TestWriter);
+
+    let tree = wf.right_pane_lines().join("\n");
+    assert!(
+        !tree.contains("[x] Task: Do work"),
+        "top task should not be marked complete when test command is missing"
+    );
 }
 
 #[test]
@@ -972,7 +1302,7 @@ fn audit_retry_limit_stops_after_four_failed_audits() {
     assert!(
         last_messages
             .iter()
-            .any(|m| m.contains("Max retries (4) reached"))
+            .any(|m| m.contains(&format!("Max retries ({MAX_FINAL_AUDIT_RETRIES}) reached")))
     );
     assert!(wf.start_next_job().is_none());
     let tree = wf.right_pane_lines().join("\n");
@@ -1855,6 +2185,105 @@ fn final_audit_runs_after_non_final_tasks_complete() {
 
     let final_job = wf.start_next_job().expect("final audit");
     assert_eq!(final_job.role, WorkerRole::FinalAudit);
+}
+
+#[test]
+fn final_audit_audit_result_fail_keeps_task_needs_changes_even_on_exit_zero() {
+    let mut wf = Workflow::default();
+    seed_single_default_task_with_final_audit(&mut wf, "Do work");
+    let _ = complete_non_final_branches_and_start_final_audit(&mut wf);
+
+    wf.append_active_output("AUDIT_RESULT: FAIL".to_string());
+    wf.append_active_output("Cross-task issue still unresolved".to_string());
+    let messages = wf.finish_active_job(true, 0);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("did not explicitly pass; retry queued")),
+        "expected retry message when final audit returns AUDIT_RESULT: FAIL"
+    );
+
+    let snapshot = wf.planner_tasks_for_file();
+    let final_status = snapshot
+        .iter()
+        .find(|entry| entry.id == "fa")
+        .map(|entry| entry.status);
+    assert_eq!(final_status, Some(PlannerTaskStatusFile::NeedsChanges));
+}
+
+#[test]
+fn final_audit_requires_explicit_pass_token_to_complete() {
+    let mut wf = Workflow::default();
+    seed_single_default_task_with_final_audit(&mut wf, "Do work");
+    let first_final_audit = complete_non_final_branches_and_start_final_audit(&mut wf);
+    match first_final_audit.run {
+        JobRun::AgentPrompt(prompt) => {
+            assert!(prompt.contains("AUDIT_RESULT: PASS"));
+            assert!(prompt.contains("AUDIT_RESULT: FAIL"));
+        }
+        JobRun::DeterministicTestRun => panic!("expected final audit prompt"),
+    }
+
+    wf.append_active_output("No issues found".to_string());
+    wf.finish_active_job(true, 0);
+    let first_snapshot = wf.planner_tasks_for_file();
+    let first_status = first_snapshot
+        .iter()
+        .find(|entry| entry.id == "fa")
+        .map(|entry| entry.status);
+    assert_eq!(first_status, Some(PlannerTaskStatusFile::NeedsChanges));
+
+    let retry_final_audit = wf.start_next_job().expect("final audit retry");
+    assert_eq!(retry_final_audit.role, WorkerRole::FinalAudit);
+    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
+    wf.append_active_output("No issues found".to_string());
+    wf.finish_active_job(true, 0);
+
+    let second_snapshot = wf.planner_tasks_for_file();
+    let second_status = second_snapshot
+        .iter()
+        .find(|entry| entry.id == "fa")
+        .map(|entry| entry.status);
+    assert_eq!(second_status, Some(PlannerTaskStatusFile::Done));
+}
+
+#[test]
+fn final_audit_retry_limit_stops_requeue_and_records_failure() {
+    let mut wf = Workflow::default();
+    seed_single_default_task_with_final_audit(&mut wf, "Do work");
+    let _ = complete_non_final_branches_and_start_final_audit(&mut wf);
+
+    let mut last_messages = Vec::new();
+    for pass in 1..=MAX_FINAL_AUDIT_RETRIES {
+        wf.append_active_output("AUDIT_RESULT: FAIL".to_string());
+        wf.append_active_output(format!("cross-task blocker remains on pass {pass}"));
+        last_messages = wf.finish_active_job(true, 0);
+
+        if pass < MAX_FINAL_AUDIT_RETRIES {
+            let retry = wf.start_next_job().expect("final audit retry");
+            assert_eq!(retry.role, WorkerRole::FinalAudit);
+        }
+    }
+
+    assert!(
+        last_messages
+            .iter()
+            .any(|m| m.contains(&format!("Max retries ({MAX_FINAL_AUDIT_RETRIES}) reached")))
+    );
+    assert!(wf.start_next_job().is_none());
+
+    let failures = wf.drain_recent_failures();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].kind, WorkflowFailureKind::Audit);
+    assert_eq!(failures[0].attempts, MAX_FINAL_AUDIT_RETRIES);
+    assert!(failures[0].action_taken.contains("stopped requeueing"));
+
+    let snapshot = wf.planner_tasks_for_file();
+    let final_status = snapshot
+        .iter()
+        .find(|entry| entry.id == "fa")
+        .map(|entry| entry.status);
+    assert_eq!(final_status, Some(PlannerTaskStatusFile::NeedsChanges));
 }
 
 #[test]
