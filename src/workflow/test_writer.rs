@@ -1,4 +1,4 @@
-use super::{make_context_summary, MAX_TEST_RETRIES, TaskStatus, WorkerJob, Workflow};
+use super::{MAX_TEST_RETRIES, TaskStatus, WorkerJob, Workflow, make_context_summary};
 
 pub(crate) fn build_prompt(
     workflow: &Workflow,
@@ -24,7 +24,10 @@ pub(crate) fn build_prompt(
         feedback
             .as_ref()
             .map(|f| format!("Feedback to address before re-running deterministic tests:\n{f}"))
-            .unwrap_or_else(|| "No test feedback yet; infer tests from task and implementation branch progress.".to_string()),
+            .unwrap_or_else(|| {
+                "No test feedback yet; infer tests from task and implementation branch progress."
+                    .to_string()
+            }),
         if skip_test_runner_on_success {
             "Special instruction: this is a cleanup pass after exhausted deterministic test retries. Remove failing tests and do not add replacements."
         } else {

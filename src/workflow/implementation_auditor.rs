@@ -1,7 +1,7 @@
-use super::Workflow;
 use super::WorkerJob;
+use super::Workflow;
 use super::{
-    audit_detects_issues, audit_feedback, make_context_summary, TaskStatus, MAX_AUDIT_RETRIES,
+    MAX_AUDIT_RETRIES, TaskStatus, audit_detects_issues, audit_feedback, make_context_summary,
 };
 
 pub(crate) fn build_prompt(
@@ -81,8 +81,8 @@ pub(crate) fn on_completion(
                 top_task_title: workflow.task_title(top_task_id),
                 attempts: pass,
                 reason: audit_feedback(transcript, code, success),
-                action_taken:
-                    "Audit retries exhausted; continued execution to next audit/step.".to_string(),
+                action_taken: "Audit retries exhausted; continued execution to next audit/step."
+                    .to_string(),
             });
             let _ = workflow.queue_next_implementor_audit(
                 top_task_id,

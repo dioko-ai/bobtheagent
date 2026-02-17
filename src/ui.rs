@@ -980,7 +980,6 @@ fn adjust_channel(channel: u8, delta: i16) -> u8 {
     value.clamp(0, 255) as u8
 }
 
-
 #[cfg(test)]
 #[path = "../tests/unit/ui_tests.rs"]
 mod tests;

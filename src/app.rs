@@ -1,5 +1,5 @@
-use std::collections::HashSet;
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::session_store::PlannerTaskFileEntry;
@@ -509,7 +509,8 @@ impl App {
             return Arc::clone(&cache.rendered);
         }
 
-        let rendered = Arc::new(wrap_word_with_positions(&self.left_top_lines.join("\n"), width).rendered);
+        let rendered =
+            Arc::new(wrap_word_with_positions(&self.left_top_lines.join("\n"), width).rendered);
         *self.left_top_wrap_cache.borrow_mut() = Some(WrappedPaneCache {
             width,
             generation: self.left_top_generation,
@@ -840,7 +841,6 @@ fn command_query(input: &str) -> Option<&str> {
     }
     Some(trimmed.split_whitespace().next().unwrap_or(trimmed))
 }
-
 
 #[cfg(test)]
 #[path = "../tests/unit/app_tests.rs"]

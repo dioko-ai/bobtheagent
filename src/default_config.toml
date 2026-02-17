@@ -1,0 +1,53 @@
+[storage]
+root_dir = "~/.metaagent/sessions"
+
+[codex.model_profiles.small-dumb]
+model = "gpt-5.3-codex-spark"
+thinking_effort = "low"
+
+[codex.model_profiles.small-smart]
+model = "gpt-5.3-codex-spark"
+thinking_effort = "medium"
+
+[codex.model_profiles.small-genius]
+model = "gpt-5.3-codex-spark"
+thinking_effort = "high"
+
+[codex.model_profiles.small-supergenius]
+model = "gpt-5.3-codex-spark"
+thinking_effort = "xhigh"
+
+[codex.model_profiles.small-supergenious]
+model = "gpt-5.3-codex-spark"
+thinking_effort = "xhigh"
+
+[codex.model_profiles.large-dumb]
+model = "gpt-5.3-codex"
+thinking_effort = "low"
+
+[codex.model_profiles.large-smart]
+model = "gpt-5.3-codex"
+thinking_effort = "medium"
+
+[codex.model_profiles.large-genius]
+model = "gpt-5.3-codex"
+thinking_effort = "high"
+
+[codex.model_profiles.large-supergenius]
+model = "gpt-5.3-codex"
+thinking_effort = "xhigh"
+
+[codex.model_profiles.large-supergenious]
+model = "gpt-5.3-codex"
+thinking_effort = "xhigh"
+
+[codex.agent_profiles]
+master = "large-smart"
+master_report = "large-smart"
+project_info = "large-smart"
+docs_attach = "large-smart"
+task_check = "large-smart"
+worker_implementor = "large-smart"
+worker_auditor = "large-smart"
+worker_test_writer = "large-smart"
+worker_final_audit = "large-smart"

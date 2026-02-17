@@ -17,6 +17,8 @@ pub struct CodexCommandConfig {
     pub args_prefix: Vec<String>,
     pub output_mode: AdapterOutputMode,
     pub persistent_session: bool,
+    pub model: Option<String>,
+    pub model_reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +41,8 @@ impl Default for CodexCommandConfig {
             ],
             output_mode: AdapterOutputMode::PlainText,
             persistent_session: false,
+            model: None,
+            model_reasoning_effort: None,
         }
     }
 }
@@ -96,11 +100,7 @@ impl CodexAdapter {
             if config.persistent_session {
                 let known_session = session_id.lock().ok().and_then(|g| g.clone());
                 if let Some(existing_session) = known_session {
-                    let mut resume_args = config.args_prefix.clone();
-                    if resume_args.first().is_some_and(|arg| arg == "exec") {
-                        resume_args.remove(0);
-                    }
-                    resume_args = sanitize_resume_args(resume_args);
+                    let resume_args = build_resume_args(&config);
                     command
                         .arg("exec")
                         .arg("resume")
@@ -108,10 +108,10 @@ impl CodexAdapter {
                         .arg(existing_session)
                         .arg(prompt);
                 } else {
-                    command.args(&config.args_prefix).arg(prompt);
+                    command.args(build_new_session_args(&config)).arg(prompt);
                 }
             } else {
-                command.args(&config.args_prefix).arg(prompt);
+                command.args(build_new_session_args(&config)).arg(prompt);
             }
             command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
@@ -255,7 +255,52 @@ fn sanitize_resume_args(args: Vec<String>) -> Vec<String> {
     out
 }
 
-fn emit_completion_event(tx: &Sender<AgentEvent>, wait_result: std::io::Result<std::process::ExitStatus>) {
+fn build_new_session_args(config: &CodexCommandConfig) -> Vec<String> {
+    let mut args = config.args_prefix.clone();
+    append_model_selection_args(
+        &mut args,
+        config.model.as_deref(),
+        config.model_reasoning_effort.as_deref(),
+    );
+    args
+}
+
+fn build_resume_args(config: &CodexCommandConfig) -> Vec<String> {
+    let mut args = config.args_prefix.clone();
+    if args.first().is_some_and(|arg| arg == "exec") {
+        args.remove(0);
+    }
+    let mut args = sanitize_resume_args(args);
+    append_model_selection_args(
+        &mut args,
+        config.model.as_deref(),
+        config.model_reasoning_effort.as_deref(),
+    );
+    args
+}
+
+fn append_model_selection_args(
+    args: &mut Vec<String>,
+    model: Option<&str>,
+    model_reasoning_effort: Option<&str>,
+) {
+    if let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) {
+        args.push("--model".to_string());
+        args.push(model.to_string());
+    }
+    if let Some(effort) = model_reasoning_effort
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.push("-c".to_string());
+        args.push(format!("model_reasoning_effort={effort:?}"));
+    }
+}
+
+fn emit_completion_event(
+    tx: &Sender<AgentEvent>,
+    wait_result: std::io::Result<std::process::ExitStatus>,
+) {
     match wait_result {
         Ok(status) => {
             let code = status.code().unwrap_or(-1);
@@ -312,7 +357,6 @@ fn looks_like_session_id(id: &str) -> bool {
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
-
 
 #[cfg(test)]
 #[path = "../tests/unit/agent_tests.rs"]

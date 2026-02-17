@@ -82,7 +82,6 @@ fn should_wrap_before_word(chars: &[char], idx: usize, col: u16, width: u16) -> 
     word_len <= width && col.saturating_add(word_len) > width
 }
 
-
 #[cfg(test)]
 #[path = "../tests/unit/text_layout_tests.rs"]
 mod tests;

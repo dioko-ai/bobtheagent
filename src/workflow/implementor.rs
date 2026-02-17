@@ -1,6 +1,6 @@
 use super::Workflow;
 use super::{
-    extract_changed_files_summary, make_context_summary, TaskStatus, WorkerJob, WorkerJobKind,
+    TaskStatus, WorkerJob, WorkerJobKind, extract_changed_files_summary, make_context_summary,
 };
 
 pub(crate) fn build_prompt(

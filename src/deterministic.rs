@@ -164,7 +164,6 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
     })
 }
 
-
 #[cfg(test)]
 #[path = "../tests/unit/deterministic_tests.rs"]
 mod tests;

@@ -1,7 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 
-mod implementor;
 mod implementation_auditor;
+mod implementor;
 mod test_auditor;
 mod test_runner;
 mod test_writer;
@@ -1101,12 +1101,16 @@ impl Workflow {
                 has_existing_top_level_test_writer
             };
 
-            let Some(implementor_id) = self.start_kind_for_top(*top_id, TaskKind::Implementor, "Implementation") else {
+            let Some(implementor_id) =
+                self.start_kind_for_top(*top_id, TaskKind::Implementor, "Implementation")
+            else {
                 continue;
             };
             self.find_or_create_child_kind(implementor_id, TaskKind::Auditor, "Audit");
 
-            if let Some(implementor_id) = self.find_next_pending_child_kind(*top_id, TaskKind::Implementor) {
+            if let Some(implementor_id) =
+                self.find_next_pending_child_kind(*top_id, TaskKind::Implementor)
+            {
                 if !self.branch_has_active_or_queued(*top_id, TaskKind::Implementor) {
                     let impl_status = self.status_of(implementor_id);
                     let has_pending_impl_audit = self
@@ -1144,7 +1148,9 @@ impl Workflow {
             }
 
             if has_top_level_test_writer {
-                if let Some(test_writer_id) = self.find_next_pending_child_kind(*top_id, TaskKind::TestWriter) {
+                if let Some(test_writer_id) =
+                    self.find_next_pending_child_kind(*top_id, TaskKind::TestWriter)
+                {
                     if !self.branch_has_active_or_queued(*top_id, TaskKind::TestWriter) {
                         self.queue.push_front(WorkerJob {
                             top_task_id: *top_id,
@@ -2063,7 +2069,6 @@ fn test_runner_feedback(transcript: &[String], code: i32) -> String {
     }
     format!("Deterministic test run failed with code {code}. Output:\n{merged}")
 }
-
 
 #[cfg(test)]
 #[path = "../tests/unit/workflow_tests.rs"]

@@ -1,5 +1,5 @@
 use super::Workflow;
-use super::{make_context_summary, test_runner_feedback, TaskStatus};
+use super::{TaskStatus, make_context_summary, test_runner_feedback};
 
 pub(crate) fn on_writer_completion(
     workflow: &mut Workflow,
@@ -119,8 +119,8 @@ pub(crate) fn on_implementor_completion(
                 top_task_title: workflow.task_title(top_task_id),
                 attempts: pass,
                 reason: test_runner_feedback(transcript, code),
-                action_taken:
-                    "Existing-tests runner retries exhausted; continued to next step.".to_string(),
+                action_taken: "Existing-tests runner retries exhausted; continued to next step."
+                    .to_string(),
             });
             workflow.set_status(implementor_id, TaskStatus::Done);
             workflow.try_mark_top_done(top_task_id, messages);

@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::default_config::DEFAULT_CONFIG_TOML;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct MetaAgentConfig {
@@ -384,8 +386,7 @@ fn load_config() -> io::Result<MetaAgentConfig> {
     let config_file = config_dir.join("config.toml");
 
     if !config_file.exists() {
-        let default = "[storage]\nroot_dir = \"~/.metaagent/sessions\"\n";
-        fs::write(&config_file, default)?;
+        fs::write(&config_file, DEFAULT_CONFIG_TOML)?;
     }
 
     let text = fs::read_to_string(config_file)?;
@@ -491,7 +492,6 @@ fn strings_to_docs(items: Vec<String>) -> Vec<PlannerTaskDocFileEntry> {
     }
     out
 }
-
 
 #[cfg(test)]
 #[path = "../tests/unit/session_store_tests.rs"]

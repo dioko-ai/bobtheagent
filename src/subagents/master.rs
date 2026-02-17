@@ -1,7 +1,4 @@
-pub(crate) fn build_master_prompt(
-    tasks_file: &str,
-    workflow_prompt: &str,
-) -> String {
+pub(crate) fn build_master_prompt(tasks_file: &str, workflow_prompt: &str) -> String {
     format!(
         "{}\n\
          Planner storage:\n\
@@ -80,7 +77,9 @@ pub(crate) fn build_session_intro_if_needed(
          - For planning state, only edit the session task/context artifacts in that session directory.\n\n\
          ",
     );
-    if let Some(info) = project_info && !info.trim().is_empty() {
+    if let Some(info) = project_info
+        && !info.trim().is_empty()
+    {
         out.push_str("Project context (project-info.md):\n");
         out.push_str(info);
         out.push_str("\n\n");

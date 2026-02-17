@@ -100,7 +100,6 @@ impl RgbToml {
     }
 }
 
-
 #[cfg(test)]
 #[path = "../tests/unit/theme_tests.rs"]
 mod tests;

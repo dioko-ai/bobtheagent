@@ -1,8 +1,6 @@
-use super::Workflow;
 use super::WorkerJob;
-use super::{
-    audit_detects_issues, audit_feedback, make_context_summary, TaskStatus,
-};
+use super::Workflow;
+use super::{TaskStatus, audit_detects_issues, audit_feedback, make_context_summary};
 
 pub(crate) fn build_prompt(
     workflow: &Workflow,

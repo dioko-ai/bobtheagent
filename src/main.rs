@@ -12,17 +12,20 @@ use crossterm::terminal::{
 use ratatui::prelude::*;
 
 mod agent;
+mod agent_models;
 mod app;
+mod default_config;
 mod deterministic;
 mod events;
-mod subagents;
 mod session_store;
+mod subagents;
 mod text_layout;
 mod theme;
 mod ui;
 mod workflow;
 
-use agent::{AgentEvent, CodexAdapter};
+use agent::{AdapterOutputMode, AgentEvent, CodexAdapter, CodexCommandConfig};
+use agent_models::{CodexAgentKind, CodexAgentModelRouting, CodexModelProfile};
 use app::{App, Pane, ResumeSessionOption, RightPaneMode};
 use deterministic::TestRunnerAdapter;
 use events::AppEvent;
@@ -31,7 +34,7 @@ use session_store::{
     SessionStore, TaskFailFileEntry,
 };
 use theme::Theme;
-use workflow::{JobRun, WorkflowFailure, WorkflowFailureKind};
+use workflow::{JobRun, WorkerRole, WorkflowFailure, WorkflowFailureKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProjectInfoStage {
@@ -60,6 +63,57 @@ struct PendingTaskWriteBaseline {
 
 const GLOBAL_RIGHT_SCROLL_LINES: u16 = 5;
 const MAX_ADAPTER_EVENTS_PER_LOOP: usize = 128;
+
+fn apply_codex_profile(config: &mut CodexCommandConfig, profile: &CodexModelProfile) {
+    config.model = Some(profile.model.clone());
+    config.model_reasoning_effort = profile.thinking_effort.clone();
+}
+
+fn build_codex_adapter(
+    output_mode: AdapterOutputMode,
+    persistent_session: bool,
+    profile: &CodexModelProfile,
+) -> CodexAdapter {
+    let mut config = CodexCommandConfig::default();
+    if matches!(output_mode, AdapterOutputMode::JsonAssistantOnly) {
+        config.args_prefix.push("--json".to_string());
+    }
+    config.output_mode = output_mode;
+    config.persistent_session = persistent_session;
+    apply_codex_profile(&mut config, profile);
+    CodexAdapter::with_config(config)
+}
+
+fn build_json_persistent_adapter(
+    model_routing: &CodexAgentModelRouting,
+    kind: CodexAgentKind,
+) -> CodexAdapter {
+    let profile = model_routing.profile_for(kind);
+    build_codex_adapter(AdapterOutputMode::JsonAssistantOnly, true, &profile)
+}
+
+fn build_plain_adapter(
+    model_routing: &CodexAgentModelRouting,
+    kind: CodexAgentKind,
+    persistent_session: bool,
+) -> CodexAdapter {
+    let profile = model_routing.profile_for(kind);
+    build_codex_adapter(AdapterOutputMode::PlainText, persistent_session, &profile)
+}
+
+fn worker_role_agent_kind(role: WorkerRole) -> CodexAgentKind {
+    match role {
+        WorkerRole::Implementor => CodexAgentKind::WorkerImplementor,
+        WorkerRole::Auditor => CodexAgentKind::WorkerAuditor,
+        WorkerRole::TestWriter => CodexAgentKind::WorkerTestWriter,
+        WorkerRole::FinalAudit => CodexAgentKind::WorkerFinalAudit,
+        WorkerRole::TestRunner => CodexAgentKind::WorkerTestWriter,
+    }
+}
+
+fn build_worker_adapter(model_routing: &CodexAgentModelRouting, role: WorkerRole) -> CodexAdapter {
+    build_plain_adapter(model_routing, worker_role_agent_kind(role), true)
+}
 
 fn main() -> io::Result<()> {
     let launch_options = parse_launch_options(std::env::args().skip(1))?;
@@ -110,6 +164,7 @@ fn dispatch_worker_job(
     active_worker_context_key: &mut Option<String>,
     test_runner_adapter: &TestRunnerAdapter,
     session_store: &SessionStore,
+    model_routing: &CodexAgentModelRouting,
 ) {
     match &job.run {
         JobRun::AgentPrompt(prompt) => {
@@ -124,7 +179,7 @@ fn dispatch_worker_job(
             let prior_session_id = worker_agent_adapters
                 .remove(&key)
                 .and_then(|adapter| adapter.saved_session_id());
-            let adapter = CodexAdapter::new_persistent();
+            let adapter = build_worker_adapter(model_routing, job.role);
             adapter.set_saved_session_id(prior_session_id);
             worker_agent_adapters.insert(key.clone(), adapter);
             let adapter = worker_agent_adapters
@@ -147,6 +202,7 @@ fn start_next_worker_job_if_any(
     active_worker_context_key: &mut Option<String>,
     test_runner_adapter: &TestRunnerAdapter,
     session_store: &SessionStore,
+    model_routing: &CodexAgentModelRouting,
 ) {
     if let Some(job) = app.start_next_worker_job() {
         dispatch_worker_job(
@@ -155,6 +211,7 @@ fn start_next_worker_job_if_any(
             active_worker_context_key,
             test_runner_adapter,
             session_store,
+            model_routing,
         );
         app.push_agent_message(format!(
             "System: Starting {:?} for task #{}.",
@@ -176,13 +233,25 @@ fn run_app(
     startup_message: Option<&str>,
 ) -> io::Result<()> {
     let mut session_store: Option<SessionStore> = None;
-    let master_adapter = CodexAdapter::new_master();
-    let master_report_adapter = CodexAdapter::new_master();
-    let project_info_adapter = CodexAdapter::new_json_assistant_persistent();
+    let model_routing = match CodexAgentModelRouting::load_from_metaagent_config() {
+        Ok(config) => config,
+        Err(err) => {
+            app.push_agent_message(format!(
+                "System: Failed to load model profile config from ~/.metaagent/config.toml: {err}. Using defaults."
+            ));
+            CodexAgentModelRouting::default()
+        }
+    };
+    let master_adapter = build_json_persistent_adapter(&model_routing, CodexAgentKind::Master);
+    let master_report_adapter =
+        build_json_persistent_adapter(&model_routing, CodexAgentKind::MasterReport);
+    let project_info_adapter =
+        build_json_persistent_adapter(&model_routing, CodexAgentKind::ProjectInfo);
     let mut worker_agent_adapters: HashMap<String, CodexAdapter> = HashMap::new();
     let mut active_worker_context_key: Option<String> = None;
-    let docs_attach_adapter = CodexAdapter::new();
-    let task_check_adapter = CodexAdapter::new();
+    let docs_attach_adapter =
+        build_plain_adapter(&model_routing, CodexAgentKind::DocsAttach, false);
+    let task_check_adapter = build_plain_adapter(&model_routing, CodexAgentKind::TaskCheck, false);
     let test_runner_adapter = TestRunnerAdapter::new();
     let mut master_transcript: Vec<String> = Vec::new();
     let mut master_report_transcript: Vec<String> = Vec::new();
@@ -224,6 +293,7 @@ fn run_app(
             &mut project_info_in_flight,
             &mut project_info_stage,
             &mut project_info_text,
+            &model_routing,
         )?;
     }
 
@@ -381,6 +451,7 @@ fn run_app(
                             &mut active_worker_context_key,
                             &test_runner_adapter,
                             active_session,
+                            &model_routing,
                         );
                     }
                     chat_updated = true;
@@ -432,13 +503,15 @@ fn run_app(
                             ));
                         }
                         let prompt = app.prepare_context_report_prompt(&new_context_entries);
-                        master_report_adapter.send_prompt(subagents::build_session_intro_if_needed(
-                            &prompt,
-                            active_session.session_dir().display().to_string().as_str(),
-                            &active_session.session_meta_file().display().to_string(),
-                            project_info_text.as_deref(),
-                            &mut master_report_session_intro_needed,
-                        ));
+                        master_report_adapter.send_prompt(
+                            subagents::build_session_intro_if_needed(
+                                &prompt,
+                                active_session.session_dir().display().to_string().as_str(),
+                                &active_session.session_meta_file().display().to_string(),
+                                project_info_text.as_deref(),
+                                &mut master_report_session_intro_needed,
+                            ),
+                        );
                     }
                     start_next_worker_job_if_any(
                         &mut app,
@@ -446,6 +519,7 @@ fn run_app(
                         &mut active_worker_context_key,
                         &test_runner_adapter,
                         active_session,
+                        &model_routing,
                     );
                     chat_updated = true;
                 }
@@ -489,13 +563,15 @@ fn run_app(
                             ));
                         }
                         let prompt = app.prepare_context_report_prompt(&new_context_entries);
-                        master_report_adapter.send_prompt(subagents::build_session_intro_if_needed(
-                            &prompt,
-                            active_session.session_dir().display().to_string().as_str(),
-                            &active_session.session_meta_file().display().to_string(),
-                            project_info_text.as_deref(),
-                            &mut master_report_session_intro_needed,
-                        ));
+                        master_report_adapter.send_prompt(
+                            subagents::build_session_intro_if_needed(
+                                &prompt,
+                                active_session.session_dir().display().to_string().as_str(),
+                                &active_session.session_meta_file().display().to_string(),
+                                project_info_text.as_deref(),
+                                &mut master_report_session_intro_needed,
+                            ),
+                        );
                     }
                     start_next_worker_job_if_any(
                         &mut app,
@@ -503,6 +579,7 @@ fn run_app(
                         &mut active_worker_context_key,
                         &test_runner_adapter,
                         active_session,
+                        &model_routing,
                     );
                     chat_updated = true;
                 }
@@ -983,6 +1060,7 @@ fn run_app(
                                 &mut project_info_in_flight,
                                 &mut project_info_stage,
                                 &mut project_info_text,
+                                &model_routing,
                             )?;
                         }
                     } else if let Some(message) = app.submit_chat_message() {
@@ -1007,6 +1085,7 @@ fn run_app(
                             &mut project_info_in_flight,
                             &mut project_info_stage,
                             &mut project_info_text,
+                            &model_routing,
                         )?;
                     }
                 }
@@ -1080,6 +1159,7 @@ fn submit_user_message(
     project_info_in_flight: &mut bool,
     project_info_stage: &mut Option<ProjectInfoStage>,
     project_info_text: &mut Option<String>,
+    model_routing: &CodexAgentModelRouting,
 ) -> io::Result<()> {
     initialize_session_for_message_if_needed(app, &message, cwd, session_store, project_info_text)?;
 
@@ -1358,6 +1438,7 @@ fn submit_user_message(
                 active_worker_context_key,
                 test_runner_adapter,
                 active_session,
+                model_routing,
             );
             app.push_agent_message(format!(
                 "System: Starting {:?} for task #{}.",
@@ -1976,7 +2057,6 @@ where
     }
     Ok(options)
 }
-
 
 #[cfg(test)]
 #[path = "../tests/unit/main_launch_tests.rs"]

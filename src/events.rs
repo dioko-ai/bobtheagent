@@ -102,7 +102,6 @@ pub fn next_event() -> io::Result<AppEvent> {
     Ok(AppEvent::Tick)
 }
 
-
 #[cfg(test)]
 #[path = "../tests/unit/events_tests.rs"]
 mod tests;
