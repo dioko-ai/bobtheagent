@@ -121,6 +121,10 @@ impl CodexAdapter {
                     let _ = tx.send(AgentEvent::System(format!(
                         "Codex adapter failed to start: {err}"
                     )));
+                    let _ = tx.send(AgentEvent::Completed {
+                        success: false,
+                        code: -1,
+                    });
                     return;
                 }
             };
@@ -145,28 +149,20 @@ impl CodexAdapter {
             }
 
             let wait_result = child.wait();
+            let skip_reader_join_after_wait = config.persistent_session
+                && matches!(config.output_mode, AdapterOutputMode::PlainText);
+            if skip_reader_join_after_wait {
+                // Worker-style adapters can run shell commands that spawn background descendants.
+                // Those descendants may inherit stdout/stderr and keep pipes open, causing reader
+                // joins to block forever after the main process exits. Emit completion immediately
+                // after wait so scheduling can continue.
+                emit_completion_event(&tx, wait_result);
+                return;
+            }
             for reader in readers {
                 let _ = reader.join();
             }
-            match wait_result {
-                Ok(status) => {
-                    let code = status.code().unwrap_or(-1);
-                    let _ = tx.send(AgentEvent::Completed {
-                        success: status.success(),
-                        code,
-                    });
-                    if !status.success() {
-                        let _ = tx.send(AgentEvent::System(format!(
-                            "Codex adapter exited with status code {code}"
-                        )));
-                    }
-                }
-                Err(err) => {
-                    let _ = tx.send(AgentEvent::System(format!(
-                        "Codex adapter failed while waiting for process: {err}"
-                    )));
-                }
-            }
+            emit_completion_event(&tx, wait_result);
         });
     }
 
@@ -191,6 +187,16 @@ impl CodexAdapter {
     pub fn reset_session(&self) {
         if let Ok(mut lock) = self.session_id.lock() {
             *lock = None;
+        }
+    }
+
+    pub fn saved_session_id(&self) -> Option<String> {
+        self.session_id.lock().ok().and_then(|lock| lock.clone())
+    }
+
+    pub fn set_saved_session_id(&self, session_id: Option<String>) {
+        if let Ok(mut lock) = self.session_id.lock() {
+            *lock = session_id;
         }
     }
 }
@@ -247,6 +253,32 @@ fn sanitize_resume_args(args: Vec<String>) -> Vec<String> {
         out.push(arg);
     }
     out
+}
+
+fn emit_completion_event(tx: &Sender<AgentEvent>, wait_result: std::io::Result<std::process::ExitStatus>) {
+    match wait_result {
+        Ok(status) => {
+            let code = status.code().unwrap_or(-1);
+            let _ = tx.send(AgentEvent::Completed {
+                success: status.success(),
+                code,
+            });
+            if !status.success() {
+                let _ = tx.send(AgentEvent::System(format!(
+                    "Codex adapter exited with status code {code}"
+                )));
+            }
+        }
+        Err(err) => {
+            let _ = tx.send(AgentEvent::System(format!(
+                "Codex adapter failed while waiting for process: {err}"
+            )));
+            let _ = tx.send(AgentEvent::Completed {
+                success: false,
+                code: -1,
+            });
+        }
+    }
 }
 
 fn parse_session_id_from_jsonl_line(line: &str) -> Option<String> {
@@ -343,6 +375,14 @@ mod tests {
         adapter.reset_session();
         let lock = adapter.session_id.lock().expect("lock should succeed");
         assert!(lock.is_none());
+    }
+
+    #[test]
+    fn saved_session_id_accessors_round_trip() {
+        let adapter = CodexAdapter::new_persistent();
+        assert!(adapter.saved_session_id().is_none());
+        adapter.set_saved_session_id(Some("session-abc".to_string()));
+        assert_eq!(adapter.saved_session_id().as_deref(), Some("session-abc"));
     }
 
     #[test]
@@ -516,6 +556,74 @@ mod tests {
                 .iter()
                 .any(|msg| msg.contains("failed to start")),
             "expected startup error, got: {system_messages:?}"
+        );
+    }
+
+    #[test]
+    fn adapter_spawn_error_still_emits_completed_event() {
+        let adapter = CodexAdapter::with_config(CodexCommandConfig {
+            program: "__no_such_program__".to_string(),
+            args_prefix: Vec::new(),
+            output_mode: AdapterOutputMode::PlainText,
+            persistent_session: false,
+        });
+        adapter.send_prompt("hello".to_string());
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut saw_completed = false;
+        while Instant::now() < deadline {
+            for event in adapter.drain_events() {
+                if let AgentEvent::Completed { success, code } = event {
+                    assert!(!success);
+                    assert_eq!(code, -1);
+                    saw_completed = true;
+                }
+            }
+            if saw_completed {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(
+            saw_completed,
+            "expected completed event even when process spawn fails"
+        );
+    }
+
+    #[test]
+    fn persistent_plain_text_completes_without_waiting_for_background_descendants() {
+        let adapter = CodexAdapter::with_config(CodexCommandConfig {
+            program: "bash".to_string(),
+            args_prefix: vec![
+                "-lc".to_string(),
+                "printf 'early\\n'; (sleep 2) &".to_string(),
+            ],
+            output_mode: AdapterOutputMode::PlainText,
+            persistent_session: true,
+        });
+        let started = Instant::now();
+        adapter.send_prompt("ignored".to_string());
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut completed_elapsed: Option<Duration> = None;
+        while Instant::now() < deadline {
+            for event in adapter.drain_events() {
+                if let AgentEvent::Completed { .. } = event {
+                    completed_elapsed = Some(started.elapsed());
+                    break;
+                }
+            }
+            if completed_elapsed.is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        let elapsed = completed_elapsed.expect("expected completed event");
+        assert!(
+            elapsed < Duration::from_millis(1200),
+            "completion was delayed by descendant-held pipes: elapsed={elapsed:?}"
         );
     }
 

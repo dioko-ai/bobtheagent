@@ -454,6 +454,10 @@ impl Workflow {
         )]
     }
 
+    pub fn execution_enabled(&self) -> bool {
+        self.execution_enabled
+    }
+
     pub fn start_next_job(&mut self) -> Option<StartedJob> {
         if !self.execution_enabled || self.active.is_some() {
             return None;

@@ -472,6 +472,10 @@ impl App {
         messages
     }
 
+    pub fn is_execution_enabled(&self) -> bool {
+        self.workflow.execution_enabled()
+    }
+
     pub fn start_next_worker_job(&mut self) -> Option<StartedJob> {
         let started = self.workflow.start_next_job();
         if started.is_some() {
@@ -986,6 +990,14 @@ mod tests {
         assert!(app.is_master_in_progress());
         app.set_master_in_progress(false);
         assert!(!app.is_master_in_progress());
+    }
+
+    #[test]
+    fn execution_enabled_flag_updates_on_start() {
+        let mut app = App::default();
+        assert!(!app.is_execution_enabled());
+        app.start_execution();
+        assert!(app.is_execution_enabled());
     }
 
     #[test]

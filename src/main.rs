@@ -116,9 +116,19 @@ fn dispatch_worker_job(
                 .parent_context_key
                 .clone()
                 .unwrap_or_else(|| format!("top:{}", job.top_task_id));
+            // Replace per-branch adapters at each dispatch so late/stale output from any prior run
+            // (for example, from descendant processes that keep pipes open) cannot bleed into the
+            // next job's event stream. Preserve the branch's saved Codex session id so contextual
+            // continuity is retained across retries/audits within the same branch.
+            let prior_session_id = worker_agent_adapters
+                .remove(&key)
+                .and_then(|adapter| adapter.saved_session_id());
+            let adapter = CodexAdapter::new_persistent();
+            adapter.set_saved_session_id(prior_session_id);
+            worker_agent_adapters.insert(key.clone(), adapter);
             let adapter = worker_agent_adapters
-                .entry(key.clone())
-                .or_insert_with(CodexAdapter::new_persistent);
+                .get(&key)
+                .expect("worker adapter should be present after insertion");
             adapter.send_prompt(prompt.clone());
             *active_worker_context_key = Some(key);
         }
@@ -244,83 +254,90 @@ fn run_app(
                         .map(|b| b.tasks_json.clone());
                     let mut tasks_refresh_ok = false;
                     let mut requested_task_file_retry = false;
-                    match active_session.read_tasks() {
-                        Ok(mut tasks) => {
-                            let docs_sanitized = sanitize_master_docs_fields(
-                                &mut tasks,
-                                pending_task_write_baseline
-                                    .as_ref()
-                                    .map(|b| b.tasks_json.as_str()),
-                            );
-                            if docs_sanitized {
-                                match serde_json::to_string_pretty(&tasks) {
-                                    Ok(text) => {
-                                        if let Err(err) =
-                                            std::fs::write(active_session.tasks_file(), text)
-                                        {
-                                            app.push_agent_message(format!(
-                                                "System: Failed to enforce docs policy in tasks.json: {err}"
-                                            ));
-                                        } else {
-                                            app.push_agent_message(
-                                                "System: Removed master-written docs entries; use /attach-docs to populate docs."
-                                                    .to_string(),
-                                            );
+                    if should_process_master_task_file_updates(app.is_execution_enabled()) {
+                        match active_session.read_tasks() {
+                            Ok(mut tasks) => {
+                                let docs_sanitized = sanitize_master_docs_fields(
+                                    &mut tasks,
+                                    pending_task_write_baseline
+                                        .as_ref()
+                                        .map(|b| b.tasks_json.as_str()),
+                                );
+                                if docs_sanitized {
+                                    match serde_json::to_string_pretty(&tasks) {
+                                        Ok(text) => {
+                                            if let Err(err) =
+                                                std::fs::write(active_session.tasks_file(), text)
+                                            {
+                                                app.push_agent_message(format!(
+                                                    "System: Failed to enforce docs policy in tasks.json: {err}"
+                                                ));
+                                            } else {
+                                                app.push_agent_message(
+                                                    "System: Removed master-written docs entries; use /attach-docs to populate docs."
+                                                        .to_string(),
+                                                );
+                                            }
                                         }
+                                        Err(err) => app.push_agent_message(format!(
+                                            "System: Failed to serialize tasks.json after docs sanitization: {err}"
+                                        )),
                                     }
-                                    Err(err) => app.push_agent_message(format!(
-                                        "System: Failed to serialize tasks.json after docs sanitization: {err}"
-                                    )),
+                                }
+                                match app.sync_planner_tasks_from_file(tasks) {
+                                    Ok(()) => {
+                                        tasks_refresh_ok = true;
+                                        task_file_fix_retry_count = 0;
+                                    }
+                                    Err(err) => {
+                                        app.push_agent_message(format!(
+                                            "System: Failed to refresh task tree from tasks.json: {err}"
+                                        ));
+                                    }
                                 }
                             }
-                            match app.sync_planner_tasks_from_file(tasks) {
-                                Ok(()) => {
-                                    tasks_refresh_ok = true;
-                                    task_file_fix_retry_count = 0;
-                                }
-                                Err(err) => {
-                                    app.push_agent_message(format!(
-                                        "System: Failed to refresh task tree from tasks.json: {err}"
-                                    ));
-                                }
+                            Err(err) => {
+                                app.push_agent_message(format!(
+                                    "System: Failed to read tasks.json after master update: {err}"
+                                ));
                             }
                         }
-                        Err(err) => {
-                            app.push_agent_message(format!(
-                                "System: Failed to read tasks.json after master update: {err}"
-                            ));
+                        if let Ok(markdown) = active_session.read_planner_markdown() {
+                            app.set_planner_markdown(markdown);
                         }
-                    }
-                    if let Ok(markdown) = active_session.read_planner_markdown() {
-                        app.set_planner_markdown(markdown);
-                    }
 
-                    if !tasks_refresh_ok {
-                        if task_file_fix_retry_count < 2 {
-                            task_file_fix_retry_count = task_file_fix_retry_count.saturating_add(1);
-                            requested_task_file_retry = true;
-                            master_adapter.send_prompt(
-                                prepend_master_session_intro_if_needed(
-                                    "tasks.json failed to parse/validate. Fix tasks.json immediately and retry. \
-                                 Ensure id and parent_id are valid values and hierarchy is valid. \
-                                 Do not ask the user to start execution yet.",
-                                    active_session.session_dir().display().to_string().as_str(),
-                                    &active_session.session_meta_file().display().to_string(),
-                                    project_info_text.as_deref(),
-                                    &mut master_session_intro_needed,
-                                ),
-                            );
-                            app.set_master_in_progress(true);
-                            app.push_agent_message(format!(
-                                "System: Requested tasks.json correction from master (attempt {}).",
-                                task_file_fix_retry_count
-                            ));
-                        } else {
-                            app.push_agent_message(
-                                "System: tasks.json correction retries exceeded. Waiting for next user input."
-                                    .to_string(),
-                            );
-                            task_file_fix_retry_count = 0;
+                        if !tasks_refresh_ok {
+                            if task_file_fix_retry_count < 2 {
+                                task_file_fix_retry_count =
+                                    task_file_fix_retry_count.saturating_add(1);
+                                requested_task_file_retry = true;
+                                master_adapter.send_prompt(
+                                    prepend_master_session_intro_if_needed(
+                                        "tasks.json failed to parse/validate. Fix tasks.json immediately and retry. \
+                                     Ensure id and parent_id are valid values and hierarchy is valid. \
+                                     Do not ask the user to start execution yet.",
+                                        active_session
+                                            .session_dir()
+                                            .display()
+                                            .to_string()
+                                            .as_str(),
+                                        &active_session.session_meta_file().display().to_string(),
+                                        project_info_text.as_deref(),
+                                        &mut master_session_intro_needed,
+                                    ),
+                                );
+                                app.set_master_in_progress(true);
+                                app.push_agent_message(format!(
+                                    "System: Requested tasks.json correction from master (attempt {}).",
+                                    task_file_fix_retry_count
+                                ));
+                            } else {
+                                app.push_agent_message(
+                                    "System: tasks.json correction retries exceeded. Waiting for next user input."
+                                        .to_string(),
+                                );
+                                task_file_fix_retry_count = 0;
+                            }
                         }
                     }
                     let changed_tasks = if tasks_refresh_ok {
@@ -1835,6 +1852,10 @@ fn should_start_task_check(
     changed_tasks && !task_check_in_flight && !docs_attach_in_flight
 }
 
+fn should_process_master_task_file_updates(execution_enabled: bool) -> bool {
+    !execution_enabled
+}
+
 fn parse_silent_master_command(message: &str) -> Option<SilentMasterCommand> {
     if App::is_split_audits_command(message) {
         return Some(SilentMasterCommand::SplitAudits);
@@ -2268,6 +2289,12 @@ mod launch_tests {
         assert!(!should_start_task_check(true, true, false));
         assert!(!should_start_task_check(true, false, true));
         assert!(!should_start_task_check(false, false, false));
+    }
+
+    #[test]
+    fn master_completion_skips_task_file_processing_while_execution_is_enabled() {
+        assert!(!should_process_master_task_file_updates(true));
+        assert!(should_process_master_task_file_updates(false));
     }
 
     #[test]
