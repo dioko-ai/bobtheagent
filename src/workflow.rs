@@ -471,6 +471,7 @@ impl Workflow {
         )]
     }
 
+    #[cfg(test)]
     pub fn execution_enabled(&self) -> bool {
         self.execution_enabled
     }
@@ -1142,7 +1143,15 @@ impl Workflow {
             }
 
             let has_top_level_test_writer = if top_children_empty {
-                let _ = self.start_kind_for_top(*top_id, TaskKind::TestWriter, "Test Writing");
+                if let Some(test_writer_id) =
+                    self.start_kind_for_top(*top_id, TaskKind::TestWriter, "Test Writing")
+                {
+                    let _ = self.find_or_create_child_kind(
+                        test_writer_id,
+                        TaskKind::TestRunner,
+                        "Deterministic Test Run",
+                    );
+                }
                 true
             } else {
                 has_existing_top_level_test_writer
@@ -1708,6 +1717,20 @@ fn validate_required_subtask_structure(nodes: &[TaskNode]) -> Result<(), String>
     }
 
     fn walk(node: &TaskNode, parent_kind: Option<TaskKind>) -> Result<(), String> {
+        if node.kind == TaskKind::FinalAudit && parent_kind.is_some() {
+            return Err(format!(
+                "Final-audit task \"{}\" must be a top-level task (parent_id must be null)",
+                node_label(node)
+            ));
+        }
+
+        if node.kind == TaskKind::Implementor && parent_kind != Some(TaskKind::Top) {
+            return Err(format!(
+                "Implementor task \"{}\" must be a direct child of a top-level task",
+                node_label(node)
+            ));
+        }
+
         if node.kind == TaskKind::Implementor {
             let audit_positions = node
                 .children
@@ -2093,6 +2116,7 @@ fn extract_tagged_block(text: &str, begin_tag: &str, end_tag: &str) -> Option<St
     Some(after_begin[..end_rel].trim().to_string())
 }
 
+#[cfg(test)]
 fn audit_strictness_policy(pass: u8) -> &'static str {
     match pass {
         1 => {

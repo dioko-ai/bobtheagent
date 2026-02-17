@@ -85,7 +85,7 @@ pub struct App {
     chat_input: String,
     chat_cursor: usize,
     chat_cursor_goal_col: Option<u16>,
-    reported_context_entries: usize,
+    last_reported_context: Vec<String>,
     expanded_detail_keys: HashSet<String>,
     resume_picker: Option<ResumePickerState>,
     task_check_in_progress: bool,
@@ -123,7 +123,7 @@ impl Default for App {
             chat_input: String::new(),
             chat_cursor: 0,
             chat_cursor_goal_col: None,
-            reported_context_entries: 0,
+            last_reported_context: Vec::new(),
             expanded_detail_keys: HashSet::new(),
             resume_picker: None,
             task_check_in_progress: false,
@@ -239,6 +239,10 @@ impl App {
 
     pub fn scroll_right_down(&mut self, max_scroll: u16) {
         self.right_scroll = (self.right_scroll + 1).min(max_scroll);
+    }
+
+    pub fn scroll_left_top_down(&mut self, max_scroll: u16) {
+        self.left_top_scroll = (self.left_top_scroll + 1).min(max_scroll);
     }
 
     pub fn submit_chat_message(&mut self) -> Option<String> {
@@ -434,6 +438,7 @@ impl App {
         messages
     }
 
+    #[cfg(test)]
     pub fn is_execution_enabled(&self) -> bool {
         self.workflow.execution_enabled()
     }
@@ -483,12 +488,9 @@ impl App {
         self.prune_expanded_detail_keys();
         self.refresh_right_lines();
         let context_entries = self.workflow.rolling_context_entries();
-        let new_entries = if context_entries.len() > self.reported_context_entries {
-            context_entries[self.reported_context_entries..].to_vec()
-        } else {
-            Vec::new()
-        };
-        self.reported_context_entries = context_entries.len();
+        let new_entries =
+            new_context_entries_since_snapshot(&self.last_reported_context, &context_entries);
+        self.last_reported_context = context_entries;
         new_entries
     }
 
@@ -500,6 +502,7 @@ impl App {
         self.chat_scroll = scroll;
     }
 
+    #[cfg(test)]
     pub fn left_top_lines(&self) -> &[String] {
         &self.left_top_lines
     }
@@ -703,7 +706,7 @@ impl App {
     pub fn replace_rolling_context_entries(&mut self, entries: Vec<String>) {
         self.workflow
             .replace_rolling_context_entries(entries.clone());
-        self.reported_context_entries = entries.len();
+        self.last_reported_context = entries;
         self.refresh_right_lines();
     }
 
@@ -844,6 +847,18 @@ fn command_query(input: &str) -> Option<&str> {
         return None;
     }
     Some(trimmed.split_whitespace().next().unwrap_or(trimmed))
+}
+
+fn new_context_entries_since_snapshot(previous: &[String], current: &[String]) -> Vec<String> {
+    let max_overlap = previous.len().min(current.len());
+    let overlap = (0..=max_overlap)
+        .rev()
+        .find(|shared| {
+            let left_start = previous.len().saturating_sub(*shared);
+            previous[left_start..] == current[..*shared]
+        })
+        .unwrap_or(0);
+    current[overlap..].to_vec()
 }
 
 #[cfg(test)]

@@ -1607,6 +1607,42 @@ fn auto_generated_subtasks_include_non_empty_details_for_reload() {
 }
 
 #[test]
+fn mid_run_snapshot_with_auto_generated_branches_is_reloadable() {
+    let mut wf = Workflow::default();
+    wf.sync_planner_tasks_from_file(vec![PlannerTaskFileEntry {
+        id: "top".to_string(),
+        title: "Top task".to_string(),
+        details: "top details".to_string(),
+        docs: Vec::new(),
+        kind: PlannerTaskKindFile::Task,
+        status: PlannerTaskStatusFile::Pending,
+        parent_id: None,
+        order: Some(0),
+    }])
+    .expect("seed plan should sync");
+
+    wf.start_execution();
+    let _ = wf.start_next_job().expect("implementor should start");
+
+    let snapshot = wf.planner_tasks_for_file();
+    assert!(
+        snapshot
+            .iter()
+            .any(|entry| entry.kind == PlannerTaskKindFile::TestWriter)
+    );
+    assert!(
+        snapshot
+            .iter()
+            .any(|entry| entry.kind == PlannerTaskKindFile::TestRunner)
+    );
+
+    let mut reloaded = Workflow::default();
+    reloaded
+        .sync_planner_tasks_from_file(snapshot)
+        .expect("mid-run snapshot should remain reloadable");
+}
+
+#[test]
 fn sync_rejects_implementor_without_auditor() {
     let mut wf = Workflow::default();
     let err = wf
@@ -1814,6 +1850,118 @@ fn sync_rejects_nested_test_writer_groups() {
         ])
         .expect_err("should reject nested test writer grouping");
     assert!(err.contains("must be a direct child of a top-level task"));
+}
+
+#[test]
+fn sync_rejects_nested_implementor_branches() {
+    let mut wf = Workflow::default();
+    let err = wf
+        .sync_planner_tasks_from_file(vec![
+            PlannerTaskFileEntry {
+                id: "top".to_string(),
+                title: "Top".to_string(),
+                details: "d".to_string(),
+                docs: Vec::new(),
+                kind: PlannerTaskKindFile::Task,
+                status: PlannerTaskStatusFile::Pending,
+                parent_id: None,
+                order: Some(0),
+            },
+            PlannerTaskFileEntry {
+                id: "impl-root".to_string(),
+                title: "Impl root".to_string(),
+                details: "d".to_string(),
+                docs: Vec::new(),
+                kind: PlannerTaskKindFile::Implementor,
+                status: PlannerTaskStatusFile::Pending,
+                parent_id: Some("top".to_string()),
+                order: Some(0),
+            },
+            PlannerTaskFileEntry {
+                id: "impl-root-audit".to_string(),
+                title: "Impl root audit".to_string(),
+                details: "d".to_string(),
+                docs: Vec::new(),
+                kind: PlannerTaskKindFile::Auditor,
+                status: PlannerTaskStatusFile::Pending,
+                parent_id: Some("impl-root".to_string()),
+                order: Some(0),
+            },
+            PlannerTaskFileEntry {
+                id: "impl-nested".to_string(),
+                title: "Impl nested".to_string(),
+                details: "d".to_string(),
+                docs: Vec::new(),
+                kind: PlannerTaskKindFile::Implementor,
+                status: PlannerTaskStatusFile::Pending,
+                parent_id: Some("impl-root".to_string()),
+                order: Some(1),
+            },
+            PlannerTaskFileEntry {
+                id: "impl-nested-audit".to_string(),
+                title: "Impl nested audit".to_string(),
+                details: "d".to_string(),
+                docs: Vec::new(),
+                kind: PlannerTaskKindFile::Auditor,
+                status: PlannerTaskStatusFile::Pending,
+                parent_id: Some("impl-nested".to_string()),
+                order: Some(0),
+            },
+        ])
+        .expect_err("should reject nested implementor branch");
+    assert!(err.contains("Implementor task \"impl-nested\""));
+    assert!(err.contains("must be a direct child of a top-level task"));
+}
+
+#[test]
+fn sync_rejects_nested_final_audit_task() {
+    let mut wf = Workflow::default();
+    let err = wf
+        .sync_planner_tasks_from_file(vec![
+            PlannerTaskFileEntry {
+                id: "top".to_string(),
+                title: "Top".to_string(),
+                details: "d".to_string(),
+                docs: Vec::new(),
+                kind: PlannerTaskKindFile::Task,
+                status: PlannerTaskStatusFile::Pending,
+                parent_id: None,
+                order: Some(0),
+            },
+            PlannerTaskFileEntry {
+                id: "impl".to_string(),
+                title: "Impl".to_string(),
+                details: "d".to_string(),
+                docs: Vec::new(),
+                kind: PlannerTaskKindFile::Implementor,
+                status: PlannerTaskStatusFile::Pending,
+                parent_id: Some("top".to_string()),
+                order: Some(0),
+            },
+            PlannerTaskFileEntry {
+                id: "impl-audit".to_string(),
+                title: "Audit".to_string(),
+                details: "d".to_string(),
+                docs: Vec::new(),
+                kind: PlannerTaskKindFile::Auditor,
+                status: PlannerTaskStatusFile::Pending,
+                parent_id: Some("impl".to_string()),
+                order: Some(0),
+            },
+            PlannerTaskFileEntry {
+                id: "nested-final".to_string(),
+                title: "Final".to_string(),
+                details: "d".to_string(),
+                docs: Vec::new(),
+                kind: PlannerTaskKindFile::FinalAudit,
+                status: PlannerTaskStatusFile::Pending,
+                parent_id: Some("top".to_string()),
+                order: Some(1),
+            },
+        ])
+        .expect_err("should reject nested final audit task");
+    assert!(err.contains("Final-audit task \"nested-final\""));
+    assert!(err.contains("must be a top-level task"));
 }
 
 #[test]

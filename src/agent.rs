@@ -55,16 +55,19 @@ pub struct CodexAdapter {
 }
 
 impl CodexAdapter {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::with_config(CodexCommandConfig::default())
     }
 
+    #[cfg(test)]
     pub fn new_persistent() -> Self {
         let mut config = CodexCommandConfig::default();
         config.persistent_session = true;
         Self::with_config(config)
     }
 
+    #[cfg(test)]
     pub fn new_json_assistant_persistent() -> Self {
         let mut config = CodexCommandConfig::default();
         config.args_prefix.push("--json".to_string());
@@ -73,6 +76,7 @@ impl CodexAdapter {
         Self::with_config(config)
     }
 
+    #[cfg(test)]
     pub fn new_master() -> Self {
         let mut config = CodexCommandConfig::default();
         config.args_prefix.push("--json".to_string());
@@ -166,6 +170,7 @@ impl CodexAdapter {
         });
     }
 
+    #[cfg(test)]
     pub fn drain_events(&self) -> Vec<AgentEvent> {
         self.drain_events_limited(usize::MAX)
     }

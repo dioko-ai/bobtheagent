@@ -342,6 +342,30 @@ fn worker_completion_updates_chat_and_tree() {
 }
 
 #[test]
+fn worker_completion_reports_new_context_when_rolling_context_is_at_capacity() {
+    let mut app = App::default();
+    app.set_right_pane_mode(RightPaneMode::TaskList);
+    load_default_plan(&mut app, "Ship fix");
+    app.replace_rolling_context_entries((0..16).map(|idx| format!("existing-{idx}")).collect());
+
+    app.start_execution();
+    let started = app.start_next_worker_job().expect("first job");
+    assert_eq!(started.role, WorkerRole::Implementor);
+    app.on_worker_output("Implemented change".to_string());
+    let new_entries = app.on_worker_completed(true, 0);
+
+    assert_eq!(
+        new_entries.len(),
+        1,
+        "expected one newly appended context entry"
+    );
+    assert!(new_entries[0].contains("Implementor worked on \"Ship fix\""));
+    let rolling = app.rolling_context_entries();
+    assert_eq!(rolling.len(), 16, "rolling context should remain capped");
+    assert_eq!(rolling.last(), Some(&new_entries[0]));
+}
+
+#[test]
 fn start_command_detection_handles_aliases() {
     assert!(App::is_start_execution_command("/start"));
     assert!(App::is_start_execution_command("start execution"));

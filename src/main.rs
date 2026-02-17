@@ -961,7 +961,10 @@ fn run_app(
                     let max_scroll = ui::right_max_scroll(screen, &app);
                     app.scroll_right_down(max_scroll);
                 } else {
-                    app.scroll_down();
+                    let size = terminal.size()?;
+                    let screen = Rect::new(0, 0, size.width, size.height);
+                    let max_scroll = ui::left_top_max_scroll(screen, &app);
+                    app.scroll_left_top_down(max_scroll);
                 }
             }
             AppEvent::CursorLeft => {
@@ -999,7 +1002,10 @@ fn run_app(
                     let max_scroll = ui::right_max_scroll(screen, &app);
                     app.scroll_right_down(max_scroll);
                 } else {
-                    app.scroll_down();
+                    let size = terminal.size()?;
+                    let screen = Rect::new(0, 0, size.width, size.height);
+                    let max_scroll = ui::left_top_max_scroll(screen, &app);
+                    app.scroll_left_top_down(max_scroll);
                 }
             }
             AppEvent::ScrollRightUpGlobal => {
@@ -1044,9 +1050,23 @@ fn run_app(
                 } else if app.active_pane == Pane::LeftBottom {
                     app.input_char(c);
                 } else if c == 'j' {
-                    app.scroll_down();
+                    if app.active_pane == Pane::Right {
+                        let size = terminal.size()?;
+                        let screen = Rect::new(0, 0, size.width, size.height);
+                        let max_scroll = ui::right_max_scroll(screen, &app);
+                        app.scroll_right_down(max_scroll);
+                    } else {
+                        let size = terminal.size()?;
+                        let screen = Rect::new(0, 0, size.width, size.height);
+                        let max_scroll = ui::left_top_max_scroll(screen, &app);
+                        app.scroll_left_top_down(max_scroll);
+                    }
                 } else if c == 'k' {
-                    app.scroll_up();
+                    if app.active_pane == Pane::Right {
+                        app.scroll_right_up();
+                    } else {
+                        app.scroll_up();
+                    }
                 }
             }
             AppEvent::Backspace => {
@@ -1209,7 +1229,10 @@ fn run_app(
                     let max_scroll = ui::right_max_scroll(screen, &app);
                     app.scroll_right_down(max_scroll);
                 } else {
-                    app.scroll_down();
+                    let size = terminal.size()?;
+                    let screen = Rect::new(0, 0, size.width, size.height);
+                    let max_scroll = ui::left_top_max_scroll(screen, &app);
+                    app.scroll_left_top_down(max_scroll);
                 }
             }
             AppEvent::MouseLeftClick(column, row) => {
@@ -1289,6 +1312,20 @@ fn submit_user_message<B: Backend>(
     if app.is_execution_busy() && conflicts_with_running_execution(&message) {
         app.push_agent_message(
             "System: Execution is currently running. Master/task editing commands are blocked until active worker jobs finish."
+                .to_string(),
+        );
+        let size = terminal.size()?;
+        let screen = Rect::new(0, 0, size.width, size.height);
+        let max_scroll = ui::chat_max_scroll(screen, app);
+        app.set_chat_scroll(max_scroll);
+        return Ok(());
+    }
+
+    if *docs_attach_in_flight
+        && (App::is_new_master_command(&message) || App::is_resume_command(&message))
+    {
+        app.push_agent_message(
+            "System: Documentation attach is still running. Wait for it to finish before switching sessions."
                 .to_string(),
         );
         let size = terminal.size()?;
@@ -1402,7 +1439,7 @@ fn submit_user_message<B: Backend>(
             }
             Ok(sessions) => {
                 let current_session_dir = session_store.as_ref().map(SessionStore::session_dir);
-                let options = build_resume_options(sessions, current_session_dir);
+                let options = build_resume_options(sessions, current_session_dir, Some(cwd));
                 if options.is_empty() {
                     app.push_agent_message(
                         "System: No other saved sessions found to resume.".to_string(),
@@ -1754,12 +1791,18 @@ fn resume_session<B: Backend>(
 fn build_resume_options(
     sessions: Vec<SessionListEntry>,
     current_session_dir: Option<&std::path::Path>,
+    current_workspace: Option<&Path>,
 ) -> Vec<ResumeSessionOption> {
     sessions
         .into_iter()
         .filter(|entry| {
             current_session_dir
                 .map(|dir| entry.session_dir != dir)
+                .unwrap_or(true)
+        })
+        .filter(|entry| {
+            current_workspace
+                .map(|workspace| Path::new(entry.workspace.trim()) == workspace)
                 .unwrap_or(true)
         })
         .map(|entry| ResumeSessionOption {
@@ -1951,15 +1994,17 @@ fn sanitize_master_docs_fields(
 ) -> bool {
     use std::collections::HashMap;
 
-    let baseline_docs = baseline_tasks_json
-        .and_then(|text| serde_json::from_str::<Vec<PlannerTaskFileEntry>>(text).ok())
-        .map(|entries| {
-            entries
-                .into_iter()
-                .map(|entry| (entry.id, entry.docs))
-                .collect::<HashMap<_, _>>()
-        })
-        .unwrap_or_default();
+    let Some(baseline_text) = baseline_tasks_json else {
+        return false;
+    };
+    let Ok(baseline_entries) = serde_json::from_str::<Vec<PlannerTaskFileEntry>>(baseline_text)
+    else {
+        return false;
+    };
+    let baseline_docs = baseline_entries
+        .into_iter()
+        .map(|entry| (entry.id, entry.docs))
+        .collect::<HashMap<_, _>>();
 
     let mut changed = false;
     for task in tasks.iter_mut() {
@@ -2162,6 +2207,9 @@ fn submit_block_reason(
     execution_busy: bool,
     message: &str,
 ) -> Option<SubmitBlockReason> {
+    if App::is_quit_command(message) {
+        return None;
+    }
     if project_info_in_flight {
         return Some(SubmitBlockReason::ProjectInfoGathering);
     }

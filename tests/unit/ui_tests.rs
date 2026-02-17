@@ -199,6 +199,19 @@ fn chat_max_scroll_increases_with_more_messages() {
 }
 
 #[test]
+fn left_top_max_scroll_increases_with_wrapped_output() {
+    let mut app = App::default();
+    let screen = Rect::new(0, 0, 120, 30);
+    let baseline = left_top_max_scroll(screen, &app);
+    for _ in 0..40 {
+        app.push_subagent_output(
+            "wrapped worker output line with enough content to span multiple visual lines",
+        );
+    }
+    assert!(left_top_max_scroll(screen, &app) > baseline);
+}
+
+#[test]
 fn wraps_by_word_without_cutting_words() {
     assert_eq!(
         wrap_word_with_positions("hello world", 6).rendered,

@@ -60,6 +60,25 @@ pub fn chat_max_scroll(screen: Rect, app: &App) -> u16 {
     total_message_lines.saturating_sub(visible_message_lines)
 }
 
+pub fn left_top_max_scroll(screen: Rect, app: &App) -> u16 {
+    let [body, _status] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(STATUS_HEIGHT)]).areas(screen);
+    let [left, _right] =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
+    let [left_top, _left_bottom] =
+        Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(left);
+    let [_title_bar, content] =
+        Layout::vertical([Constraint::Length(TITLE_BAR_HEIGHT), Constraint::Min(0)])
+            .areas(left_top);
+    if content.width < 1 || content.height < 1 {
+        return 0;
+    }
+    let text_width = content.width.saturating_sub(TEXT_PADDING * 2).max(1);
+    let total_lines = app.left_top_wrapped_text(text_width).lines().count() as u16;
+    let visible_lines = content.height.saturating_sub(TEXT_PADDING * 2);
+    total_lines.saturating_sub(visible_lines)
+}
+
 pub fn right_max_scroll(screen: Rect, app: &App) -> u16 {
     let [body, _status] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(STATUS_HEIGHT)]).areas(screen);

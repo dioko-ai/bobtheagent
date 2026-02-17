@@ -196,10 +196,7 @@ fn task_check_allows_only_quit_commands() {
 
 #[test]
 fn submit_block_reason_prioritizes_project_info_and_respects_task_check_quit_escape() {
-    assert_eq!(
-        submit_block_reason(true, false, true, false, "/quit"),
-        Some(SubmitBlockReason::ProjectInfoGathering)
-    );
+    assert_eq!(submit_block_reason(true, false, true, false, "/quit"), None);
     assert_eq!(
         submit_block_reason(false, false, true, false, "hello"),
         Some(SubmitBlockReason::TaskCheck)
@@ -207,6 +204,10 @@ fn submit_block_reason_prioritizes_project_info_and_respects_task_check_quit_esc
     assert_eq!(
         submit_block_reason(false, true, false, false, "hello"),
         Some(SubmitBlockReason::MasterBusy)
+    );
+    assert_eq!(
+        submit_block_reason(false, true, false, false, "/quit"),
+        None
     );
     assert_eq!(
         submit_block_reason(false, false, true, false, "/quit"),
@@ -666,7 +667,7 @@ fn newmaster_resets_master_report_and_task_check_runtime_state() {
     let mut pending_task_write_baseline = Some(PendingTaskWriteBaseline {
         tasks_json: "[]".to_string(),
     });
-    let mut docs_attach_in_flight = true;
+    let mut docs_attach_in_flight = false;
     let mut master_session_intro_needed = false;
     let mut master_report_session_intro_needed = false;
     let mut pending_master_message_after_project_info = Some("queued".to_string());
@@ -1178,6 +1179,7 @@ fn build_resume_options_excludes_current_session_dir() {
             },
         ],
         Some(current),
+        None,
     );
     assert_eq!(options.len(), 1);
     assert_eq!(options[0].session_dir, "/tmp/other");
@@ -1196,9 +1198,39 @@ fn build_resume_options_includes_all_sessions_without_active_session() {
             last_used_epoch_secs: 1,
         }],
         None,
+        None,
     );
     assert_eq!(options.len(), 1);
     assert_eq!(options[0].session_dir, "/tmp/only");
+}
+
+#[test]
+fn build_resume_options_filters_to_current_workspace() {
+    let workspace = std::path::Path::new("/work/current");
+    let options = build_resume_options(
+        vec![
+            SessionListEntry {
+                session_dir: std::path::PathBuf::from("/tmp/current-1"),
+                workspace: "/work/current".to_string(),
+                title: Some("Current".to_string()),
+                created_at_label: Some("2026-02-16T10:00:00Z".to_string()),
+                created_at_epoch_secs: 10,
+                last_used_epoch_secs: 10,
+            },
+            SessionListEntry {
+                session_dir: std::path::PathBuf::from("/tmp/other"),
+                workspace: "/work/other".to_string(),
+                title: Some("Other".to_string()),
+                created_at_label: Some("2026-02-16T11:00:00Z".to_string()),
+                created_at_epoch_secs: 9,
+                last_used_epoch_secs: 9,
+            },
+        ],
+        None,
+        Some(workspace),
+    );
+    assert_eq!(options.len(), 1);
+    assert_eq!(options[0].session_dir, "/tmp/current-1");
 }
 
 #[test]
@@ -1254,6 +1286,134 @@ fn sanitize_master_docs_fields_preserves_baseline_docs_for_existing_tasks() {
     assert!(changed);
     assert_eq!(tasks[0].docs.len(), 1);
     assert_eq!(tasks[0].docs[0].title, "Keep");
+}
+
+#[test]
+fn sanitize_master_docs_fields_ignores_missing_baseline() {
+    let mut tasks = vec![PlannerTaskFileEntry {
+        id: "t1".to_string(),
+        title: "Task".to_string(),
+        details: "details".to_string(),
+        docs: vec![session_store::PlannerTaskDocFileEntry {
+            title: "Keep".to_string(),
+            url: "https://keep".to_string(),
+            summary: "sum".to_string(),
+        }],
+        kind: session_store::PlannerTaskKindFile::Task,
+        status: session_store::PlannerTaskStatusFile::Pending,
+        parent_id: None,
+        order: Some(0),
+    }];
+
+    let changed = sanitize_master_docs_fields(&mut tasks, None);
+    assert!(!changed);
+    assert_eq!(tasks[0].docs.len(), 1);
+    assert_eq!(tasks[0].docs[0].title, "Keep");
+}
+
+#[test]
+fn docs_attach_blocks_session_switch_commands() {
+    let mut app = App::default();
+    let master_adapter = CodexAdapter::new();
+    let master_report_adapter = CodexAdapter::new();
+    let project_info_adapter = CodexAdapter::new();
+    let docs_attach_adapter = CodexAdapter::new();
+    let test_runner_adapter = TestRunnerAdapter::new();
+    let model_routing = CodexAgentModelRouting::default();
+
+    let mut worker_agent_adapters: HashMap<String, CodexAdapter> = HashMap::new();
+    let mut active_worker_context_key = None;
+    let mut session_store: Option<SessionStore> = None;
+    let cwd = std::env::current_dir().expect("cwd");
+    let mut pending_task_write_baseline = None;
+    let mut docs_attach_in_flight = true;
+    let mut master_session_intro_needed = true;
+    let mut master_report_session_intro_needed = true;
+    let mut pending_master_message_after_project_info = None;
+    let mut project_info_in_flight = false;
+    let mut project_info_stage = None;
+    let mut project_info_text = None;
+    let mut master_report_in_flight = false;
+    let mut pending_master_report_prompts = std::collections::VecDeque::new();
+    let mut master_report_transcript = Vec::new();
+    let mut task_check_in_flight = false;
+    let mut task_check_baseline = None;
+
+    let backend = ratatui::backend::TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+
+    submit_user_message(
+        &mut app,
+        "/newmaster".to_string(),
+        &master_adapter,
+        &master_report_adapter,
+        &project_info_adapter,
+        &mut worker_agent_adapters,
+        &mut active_worker_context_key,
+        &docs_attach_adapter,
+        &test_runner_adapter,
+        &mut master_report_in_flight,
+        &mut pending_master_report_prompts,
+        &mut master_report_transcript,
+        &mut task_check_in_flight,
+        &mut task_check_baseline,
+        &mut session_store,
+        &cwd,
+        &mut terminal,
+        &mut pending_task_write_baseline,
+        &mut docs_attach_in_flight,
+        &mut master_session_intro_needed,
+        &mut master_report_session_intro_needed,
+        &mut pending_master_message_after_project_info,
+        &mut project_info_in_flight,
+        &mut project_info_stage,
+        &mut project_info_text,
+        &model_routing,
+    )
+    .expect("newmaster command should not hard fail");
+    assert!(
+        app.left_bottom_lines()
+            .last()
+            .expect("status message")
+            .contains("Documentation attach is still running")
+    );
+
+    submit_user_message(
+        &mut app,
+        "/resume".to_string(),
+        &master_adapter,
+        &master_report_adapter,
+        &project_info_adapter,
+        &mut worker_agent_adapters,
+        &mut active_worker_context_key,
+        &docs_attach_adapter,
+        &test_runner_adapter,
+        &mut master_report_in_flight,
+        &mut pending_master_report_prompts,
+        &mut master_report_transcript,
+        &mut task_check_in_flight,
+        &mut task_check_baseline,
+        &mut session_store,
+        &cwd,
+        &mut terminal,
+        &mut pending_task_write_baseline,
+        &mut docs_attach_in_flight,
+        &mut master_session_intro_needed,
+        &mut master_report_session_intro_needed,
+        &mut pending_master_message_after_project_info,
+        &mut project_info_in_flight,
+        &mut project_info_stage,
+        &mut project_info_text,
+        &model_routing,
+    )
+    .expect("resume command should not hard fail");
+    assert!(
+        app.left_bottom_lines()
+            .last()
+            .expect("status message")
+            .contains("Documentation attach is still running")
+    );
+    assert!(!app.is_resume_picker_open());
 }
 
 #[test]
