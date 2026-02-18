@@ -1,8 +1,9 @@
-use std::fs;
 use std::path::Path;
 
 use ratatui::style::Color;
 use serde::Deserialize;
+
+use crate::artifact_io::read_text_file;
 
 #[derive(Debug, Clone)]
 pub struct Theme {
@@ -34,7 +35,7 @@ impl Default for Theme {
 impl Theme {
     pub fn load_or_default(path: impl AsRef<Path>) -> Self {
         let path_ref = path.as_ref();
-        match fs::read_to_string(path_ref) {
+        match read_text_file(path_ref) {
             Ok(contents) => match Self::from_toml_str(&contents) {
                 Ok(theme) => theme,
                 Err(err) => {

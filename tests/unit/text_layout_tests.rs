@@ -20,3 +20,11 @@ fn produces_cursor_positions_for_each_char_boundary() {
     assert_eq!(wrapped.positions.len(), "abc def".chars().count() + 1);
     assert_eq!(wrapped.positions[0], (0, 0));
 }
+
+#[test]
+fn wraps_independently_after_explicit_newlines() {
+    let wrapped = wrap_word_with_positions("abc\ndef ghi", 4);
+    assert_eq!(wrapped.rendered, "abc\ndef \nghi");
+    assert_eq!(wrapped.positions[0], (0, 0));
+    assert_eq!(wrapped.positions[4], (1, 0));
+}

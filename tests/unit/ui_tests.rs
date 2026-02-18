@@ -26,6 +26,42 @@ fn buffer_to_string(buffer: &Buffer) -> String {
     text
 }
 
+fn seed_execution_plan(app: &mut App) {
+    app.sync_planner_tasks_from_file(vec![
+        PlannerTaskFileEntry {
+            id: "top-1".to_string(),
+            title: "Top task".to_string(),
+            details: "top details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Task,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: None,
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "impl-1".to_string(),
+            title: "Implementation".to_string(),
+            details: "implementor details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Implementor,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("top-1".to_string()),
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "impl-1-audit".to_string(),
+            title: "Audit".to_string(),
+            details: "audit details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Auditor,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("impl-1".to_string()),
+            order: Some(0),
+        },
+    ])
+    .expect("seed plan should sync");
+}
+
 #[test]
 fn render_shows_three_panes_and_help_text() {
     let app = App::default();
@@ -40,11 +76,23 @@ fn render_shows_three_panes_and_help_text() {
 }
 
 #[test]
-fn render_shows_master_working_indicator_when_busy() {
+fn render_shows_chat_header_working_indicator_when_master_busy() {
     let mut app = App::default();
     app.set_master_in_progress(true);
     let text = render_text(&app, 120, 30);
-    assert!(text.contains("Master working"));
+    assert!(text.contains("Agent Chat | Working ["));
+    assert!(!text.contains("Master working"));
+}
+
+#[test]
+fn render_shows_chat_header_working_indicator_when_worker_execution_busy() {
+    let mut app = App::default();
+    seed_execution_plan(&mut app);
+    app.start_execution();
+    assert!(app.is_execution_busy());
+    let text = render_text(&app, 120, 30);
+    assert!(text.contains("Agent Chat | Working ["));
+    assert!(!text.contains("Master working"));
 }
 
 #[test]
@@ -106,6 +154,7 @@ fn render_shows_task_check_overlay_when_running() {
     app.set_task_check_in_progress(true);
     let text = render_text(&app, 120, 30);
     assert!(text.contains("Checking Tasks..."));
+    assert!(text.contains("Agent Chat | Working ["));
 }
 
 #[test]
@@ -114,6 +163,7 @@ fn render_shows_docs_attach_overlay_when_running() {
     app.set_docs_attach_in_progress(true);
     let text = render_text(&app, 120, 30);
     assert!(text.contains("Attaching Documentation..."));
+    assert!(text.contains("Agent Chat | Working ["));
 }
 
 #[test]

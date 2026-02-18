@@ -1,11 +1,9 @@
 use std::collections::HashMap;
-use std::env;
-use std::fs;
 use std::io;
-use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use crate::artifact_io::{ensure_default_metaagent_config, read_text_file};
 use crate::default_config::DEFAULT_CONFIG_TOML;
 
 pub const DEFAULT_PROFILE_LABEL: &str = "large-smart";
@@ -61,11 +59,8 @@ impl Default for CodexAgentModelRouting {
 impl CodexAgentModelRouting {
     pub fn load_from_metaagent_config() -> io::Result<Self> {
         let default_config = parse_config(DEFAULT_CONFIG_TOML)?;
-        let path = home_dir()?.join(".metaagent").join("config.toml");
-        if !path.exists() {
-            return Ok(Self::from_config(default_config));
-        }
-        let text = fs::read_to_string(path)?;
+        let path = ensure_default_metaagent_config()?;
+        let text = read_text_file(&path)?;
         let override_config = parse_config(&text)?;
         Ok(Self::from_merged_config(default_config, override_config))
     }
@@ -83,10 +78,6 @@ impl CodexAgentModelRouting {
             .or_else(|| self.profiles.get(DEFAULT_PROFILE_LABEL))
             .cloned()
             .unwrap_or_else(default_large_smart_profile)
-    }
-
-    fn from_config(config: MetaAgentConfigFile) -> Self {
-        Self::from_codex_config(config.codex)
     }
 
     fn from_merged_config(base: MetaAgentConfigFile, override_cfg: MetaAgentConfigFile) -> Self {
@@ -265,12 +256,6 @@ fn default_large_smart_profile() -> CodexModelProfile {
         model: "gpt-5.3-codex".to_string(),
         thinking_effort: Some("medium".to_string()),
     }
-}
-
-fn home_dir() -> io::Result<PathBuf> {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))
 }
 
 #[cfg(test)]

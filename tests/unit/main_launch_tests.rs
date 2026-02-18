@@ -86,6 +86,41 @@ fn integration_plan_with_final() -> Vec<PlannerTaskFileEntry> {
     ]
 }
 
+fn simple_execution_plan() -> Vec<PlannerTaskFileEntry> {
+    vec![
+        PlannerTaskFileEntry {
+            id: "top".to_string(),
+            title: "Task".to_string(),
+            details: "top details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Task,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: None,
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "impl".to_string(),
+            title: "Implementation".to_string(),
+            details: "impl details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Implementor,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("top".to_string()),
+            order: Some(0),
+        },
+        PlannerTaskFileEntry {
+            id: "impl-audit".to_string(),
+            title: "Implementation audit".to_string(),
+            details: "audit details".to_string(),
+            docs: Vec::new(),
+            kind: PlannerTaskKindFile::Auditor,
+            status: PlannerTaskStatusFile::Pending,
+            parent_id: Some("impl".to_string()),
+            order: Some(0),
+        },
+    ]
+}
+
 #[test]
 fn parse_launch_options_accepts_send_file() {
     let options = parse_launch_options(vec![
@@ -97,6 +132,13 @@ fn parse_launch_options_accepts_send_file() {
         options.send_file.as_deref(),
         Some(std::path::Path::new("/tmp/prompt.txt"))
     );
+}
+
+#[test]
+fn parse_launch_options_accepts_verbose_flag() {
+    let options = parse_launch_options(vec!["--verbose".to_string()]).expect("options should parse");
+    assert!(options.command.is_none());
+    assert!(options.verbose);
 }
 
 #[test]
@@ -722,6 +764,547 @@ fn newmaster_resets_master_report_and_task_check_runtime_state() {
     assert!(master_report_transcript.is_empty());
     assert!(!task_check_in_flight);
     assert!(task_check_baseline.is_none());
+}
+
+#[test]
+fn cli_task_contract_round_trip_preserves_all_fields() {
+    let file_task = PlannerTaskFileEntry {
+        id: "task-1".to_string(),
+        title: "Implement adapter seam".to_string(),
+        details: "details".to_string(),
+        docs: vec![session_store::PlannerTaskDocFileEntry {
+            title: "Rust tests".to_string(),
+            url: "https://doc.rust-lang.org/stable/book/ch11-00-testing.html".to_string(),
+            summary: "Testing chapter".to_string(),
+        }],
+        kind: PlannerTaskKindFile::TestWriter,
+        status: PlannerTaskStatusFile::NeedsChanges,
+        parent_id: Some("top".to_string()),
+        order: Some(2),
+    };
+
+    let contract = file_task_to_contract_task(file_task.clone());
+    let round_tripped = contract_task_to_file_task(contract);
+    assert_eq!(round_tripped.id, file_task.id);
+    assert_eq!(round_tripped.title, file_task.title);
+    assert_eq!(round_tripped.details, file_task.details);
+    assert_eq!(round_tripped.parent_id, file_task.parent_id);
+    assert_eq!(round_tripped.order, file_task.order);
+    assert_eq!(round_tripped.kind, file_task.kind);
+    assert_eq!(round_tripped.status, file_task.status);
+    assert_eq!(round_tripped.docs.len(), file_task.docs.len());
+    assert_eq!(round_tripped.docs[0].title, file_task.docs[0].title);
+    assert_eq!(round_tripped.docs[0].url, file_task.docs[0].url);
+    assert_eq!(round_tripped.docs[0].summary, file_task.docs[0].summary);
+}
+
+#[test]
+fn execute_core_api_contract_keeps_request_identity_and_capability() {
+    let request = api::RequestEnvelope {
+        request_id: Some("req-42".to_string()),
+        capability: api::CapabilityId::AppPromptPreparation,
+        metadata: api::RequestMetadata {
+            transport: Some("mock-transport".to_string()),
+            actor: Some("mock-actor".to_string()),
+        },
+        payload: api::ApiRequestContract::App(api::AppRequest::PrepareAttachDocsPrompt {
+            tasks_file: "/tmp/tasks.json".to_string(),
+        }),
+    };
+
+    let response = execute_core_api_contract(request).expect("contract execution should succeed");
+    assert_eq!(response.request_id.as_deref(), Some("req-42"));
+    assert_eq!(response.capability, api::CapabilityId::AppPromptPreparation);
+    assert!(matches!(
+        response.result,
+        api::ApiResultEnvelope::Ok {
+            data: api::ApiResponseContract::App(api::AppResponse::Prompt { .. })
+        }
+    ));
+}
+
+#[test]
+fn execute_core_workflow_validation_is_transport_agnostic() {
+    let tasks = vec![api::PlannerTaskEntryContract {
+        id: "top".to_string(),
+        title: "Top".to_string(),
+        details: "d".to_string(),
+        docs: Vec::new(),
+        kind: api::PlannerTaskKindContract::Task,
+        status: api::PlannerTaskStatusContract::Pending,
+        parent_id: None,
+        order: Some(0),
+    }];
+
+    let request_with_cli_transport = api::RequestEnvelope {
+        request_id: Some("a".to_string()),
+        capability: api::CapabilityId::WorkflowTaskGraphSync,
+        metadata: api::RequestMetadata {
+            transport: Some("cli".to_string()),
+            actor: None,
+        },
+        payload: api::ApiRequestContract::Workflow(api::WorkflowRequest::SyncPlannerTasks {
+            tasks: tasks.clone(),
+        }),
+    };
+
+    let request_with_mock_transport = api::RequestEnvelope {
+        request_id: Some("b".to_string()),
+        capability: api::CapabilityId::WorkflowTaskGraphSync,
+        metadata: api::RequestMetadata {
+            transport: Some("mock-http".to_string()),
+            actor: None,
+        },
+        payload: api::ApiRequestContract::Workflow(api::WorkflowRequest::SyncPlannerTasks {
+            tasks,
+        }),
+    };
+
+    let response_a = execute_core_api_contract(request_with_cli_transport)
+        .expect("cli transport contract request should succeed");
+    let response_b = execute_core_api_contract(request_with_mock_transport)
+        .expect("mock transport contract request should succeed");
+
+    let data_a = match response_a.result {
+        api::ApiResultEnvelope::Ok { data } => data,
+        api::ApiResultEnvelope::Err { error } => panic!("unexpected error: {error:?}"),
+    };
+    let data_b = match response_b.result {
+        api::ApiResultEnvelope::Ok { data } => data,
+        api::ApiResultEnvelope::Err { error } => panic!("unexpected error: {error:?}"),
+    };
+
+    assert_eq!(data_a, data_b);
+}
+
+#[test]
+fn execute_core_unsupported_domain_is_transport_agnostic() {
+    let request_cli = api::RequestEnvelope {
+        request_id: None,
+        capability: api::CapabilityId::EventPolling,
+        metadata: api::RequestMetadata {
+            transport: Some("cli".to_string()),
+            actor: None,
+        },
+        payload: api::ApiRequestContract::Events(api::EventsRequest::NextEvent),
+    };
+    let request_mock = api::RequestEnvelope {
+        request_id: None,
+        capability: api::CapabilityId::EventPolling,
+        metadata: api::RequestMetadata {
+            transport: Some("mock-transport".to_string()),
+            actor: Some("{\"source\":\"mock\"}".to_string()),
+        },
+        payload: api::ApiRequestContract::Events(api::EventsRequest::NextEvent),
+    };
+
+    let err_cli = execute_core_api_contract(request_cli).expect_err("events domain should fail");
+    let err_mock = execute_core_api_contract(request_mock).expect_err("events domain should fail");
+
+    assert_eq!(err_cli.code, api::ApiErrorCode::Unsupported);
+    assert_eq!(err_mock.code, api::ApiErrorCode::Unsupported);
+    assert_eq!(err_cli.message, err_mock.message);
+}
+
+#[test]
+fn execute_core_session_project_info_write_then_read_round_trips() {
+    let (store, session_dir) = open_temp_store("metaagent-session-project-info-contract");
+    let cwd = std::env::current_dir().expect("cwd");
+    let actor = format!(
+        "{{\"cwd\":\"{}\",\"session_dir\":\"{}\"}}",
+        cwd.display(),
+        session_dir.display()
+    );
+
+    let write_request = api::RequestEnvelope {
+        request_id: Some("write-project-info".to_string()),
+        capability: api::CapabilityId::SessionProjectContextStorage,
+        metadata: api::RequestMetadata {
+            transport: Some("cli".to_string()),
+            actor: Some(actor.clone()),
+        },
+        payload: api::ApiRequestContract::Session(api::SessionRequest::WriteProjectInfo {
+            markdown: "# Context\n\n- Added via API contract\n".to_string(),
+        }),
+    };
+    let write_response =
+        execute_core_api_contract(write_request).expect("write project info should succeed");
+    assert!(matches!(
+        write_response.result,
+        api::ApiResultEnvelope::Ok {
+            data: api::ApiResponseContract::Session(api::SessionResponse::Ack)
+        }
+    ));
+
+    let read_request = api::RequestEnvelope {
+        request_id: Some("read-project-info".to_string()),
+        capability: api::CapabilityId::SessionProjectContextStorage,
+        metadata: api::RequestMetadata {
+            transport: Some("cli".to_string()),
+            actor: Some(actor),
+        },
+        payload: api::ApiRequestContract::Session(api::SessionRequest::ReadProjectInfo),
+    };
+    let read_response =
+        execute_core_api_contract(read_request).expect("read project info should succeed");
+    match read_response.result {
+        api::ApiResultEnvelope::Ok {
+            data: api::ApiResponseContract::Session(api::SessionResponse::ProjectInfo { markdown }),
+        } => assert_eq!(markdown, "# Context\n\n- Added via API contract\n"),
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    drop(store);
+    std::fs::remove_dir_all(session_dir).ok();
+}
+
+#[test]
+fn execute_core_session_task_fails_append_then_read_round_trips() {
+    let (store, session_dir) = open_temp_store("metaagent-session-task-fails-contract");
+    let cwd = std::env::current_dir().expect("cwd");
+    let actor = format!(
+        "{{\"cwd\":\"{}\",\"session_dir\":\"{}\"}}",
+        cwd.display(),
+        session_dir.display()
+    );
+
+    let append_request = api::RequestEnvelope {
+        request_id: Some("append-task-fails".to_string()),
+        capability: api::CapabilityId::SessionFailureStorage,
+        metadata: api::RequestMetadata {
+            transport: Some("cli".to_string()),
+            actor: Some(actor.clone()),
+        },
+        payload: api::ApiRequestContract::Session(api::SessionRequest::AppendTaskFails {
+            entries: vec![api::TaskFailureContract {
+                kind: api::WorkflowFailureKindContract::Test,
+                top_task_id: 44,
+                top_task_title: "Regression coverage".to_string(),
+                attempts: 2,
+                reason: "missing test path".to_string(),
+                action_taken: "requeued".to_string(),
+            }],
+        }),
+    };
+    let append_response =
+        execute_core_api_contract(append_request).expect("append task fails should succeed");
+    assert!(matches!(
+        append_response.result,
+        api::ApiResultEnvelope::Ok {
+            data: api::ApiResponseContract::Session(api::SessionResponse::Ack)
+        }
+    ));
+
+    let read_request = api::RequestEnvelope {
+        request_id: Some("read-task-fails".to_string()),
+        capability: api::CapabilityId::SessionFailureStorage,
+        metadata: api::RequestMetadata {
+            transport: Some("cli".to_string()),
+            actor: Some(actor),
+        },
+        payload: api::ApiRequestContract::Session(api::SessionRequest::ReadTaskFails),
+    };
+    let read_response =
+        execute_core_api_contract(read_request).expect("read task fails should succeed");
+    match read_response.result {
+        api::ApiResultEnvelope::Ok {
+            data: api::ApiResponseContract::Session(api::SessionResponse::TaskFails { entries }),
+        } => {
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].kind, api::WorkflowFailureKindContract::Test);
+            assert_eq!(entries[0].top_task_id, 44);
+            assert_eq!(entries[0].top_task_title, "Regression coverage");
+            assert_eq!(entries[0].attempts, 2);
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    drop(store);
+    std::fs::remove_dir_all(session_dir).ok();
+}
+
+#[test]
+fn execute_core_session_read_session_meta_maps_file_fields() {
+    let (store, session_dir) = open_temp_store("metaagent-session-meta-contract");
+    let cwd = std::env::current_dir().expect("cwd");
+    let actor = format!(
+        "{{\"cwd\":\"{}\",\"session_dir\":\"{}\"}}",
+        cwd.display(),
+        session_dir.display()
+    );
+
+    std::fs::write(
+        store.session_meta_file(),
+        r#"{"title":"Hardening pass","created_at":"2026-02-18T12:00:00Z","stack_description":"Rust","test_command":"cargo test"}"#,
+    )
+    .expect("write session meta");
+
+    let request = api::RequestEnvelope {
+        request_id: Some("read-session-meta".to_string()),
+        capability: api::CapabilityId::SessionProjectContextStorage,
+        metadata: api::RequestMetadata {
+            transport: Some("cli".to_string()),
+            actor: Some(actor),
+        },
+        payload: api::ApiRequestContract::Session(api::SessionRequest::ReadSessionMeta),
+    };
+    let response = execute_core_api_contract(request).expect("read session meta should succeed");
+    match response.result {
+        api::ApiResultEnvelope::Ok {
+            data: api::ApiResponseContract::Session(api::SessionResponse::SessionMeta { meta }),
+        } => {
+            assert_eq!(meta.title, "Hardening pass");
+            assert_eq!(meta.created_at, "2026-02-18T12:00:00Z");
+            assert_eq!(meta.stack_description, "Rust");
+            assert_eq!(meta.test_command.as_deref(), Some("cargo test"));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    drop(store);
+    std::fs::remove_dir_all(session_dir).ok();
+}
+
+#[test]
+fn convert_submit_uses_prompt_service_and_captures_tasks_baseline() {
+    let mut app = App::default();
+    let master_adapter = CodexAdapter::new();
+    let master_report_adapter = CodexAdapter::new();
+    let project_info_adapter = CodexAdapter::new();
+    let docs_attach_adapter = CodexAdapter::new();
+    let test_runner_adapter = TestRunnerAdapter::new();
+    let model_routing = CodexAgentModelRouting::default();
+
+    let mut worker_agent_adapters: HashMap<String, CodexAdapter> = HashMap::new();
+    let mut active_worker_context_key = None;
+    let cwd = std::env::current_dir().expect("cwd");
+    let (store, session_dir) = open_temp_store("metaagent-convert-submit-service");
+    let mut session_store = Some(store);
+    let active_session = session_store.as_ref().expect("active session");
+    let baseline_text = r#"[{"id":"top"}]"#;
+    std::fs::write(active_session.tasks_file(), baseline_text).expect("write baseline tasks");
+
+    let mut pending_task_write_baseline = None;
+    let mut docs_attach_in_flight = false;
+    let mut master_session_intro_needed = true;
+    let mut master_report_session_intro_needed = true;
+    let mut pending_master_message_after_project_info = None;
+    let mut project_info_in_flight = false;
+    let mut project_info_stage = None;
+    let mut project_info_text = Some("existing project context".to_string());
+    let mut master_report_in_flight = false;
+    let mut pending_master_report_prompts = std::collections::VecDeque::new();
+    let mut master_report_transcript = Vec::new();
+    let mut task_check_in_flight = false;
+    let mut task_check_baseline = None;
+
+    let backend = ratatui::backend::TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+
+    submit_user_message(
+        &mut app,
+        "/convert".to_string(),
+        &master_adapter,
+        &master_report_adapter,
+        &project_info_adapter,
+        &mut worker_agent_adapters,
+        &mut active_worker_context_key,
+        &docs_attach_adapter,
+        &test_runner_adapter,
+        &mut master_report_in_flight,
+        &mut pending_master_report_prompts,
+        &mut master_report_transcript,
+        &mut task_check_in_flight,
+        &mut task_check_baseline,
+        &mut session_store,
+        &cwd,
+        &mut terminal,
+        &mut pending_task_write_baseline,
+        &mut docs_attach_in_flight,
+        &mut master_session_intro_needed,
+        &mut master_report_session_intro_needed,
+        &mut pending_master_message_after_project_info,
+        &mut project_info_in_flight,
+        &mut project_info_stage,
+        &mut project_info_text,
+        &model_routing,
+    )
+    .expect("convert should succeed");
+
+    assert!(app.is_master_in_progress());
+    assert!(!app.is_planner_mode());
+    assert!(!master_session_intro_needed);
+    assert_eq!(
+        pending_task_write_baseline
+            .as_ref()
+            .map(|baseline| baseline.tasks_json.as_str()),
+        Some(baseline_text)
+    );
+
+    std::fs::remove_dir_all(session_dir).ok();
+}
+
+#[test]
+fn normal_submit_with_project_context_uses_prompt_service_path() {
+    let mut app = App::default();
+    app.set_right_pane_mode(RightPaneMode::TaskList);
+    let master_adapter = CodexAdapter::new();
+    let master_report_adapter = CodexAdapter::new();
+    let project_info_adapter = CodexAdapter::new();
+    let docs_attach_adapter = CodexAdapter::new();
+    let test_runner_adapter = TestRunnerAdapter::new();
+    let model_routing = CodexAgentModelRouting::default();
+
+    let mut worker_agent_adapters: HashMap<String, CodexAdapter> = HashMap::new();
+    let mut active_worker_context_key = None;
+    let cwd = std::env::current_dir().expect("cwd");
+    let (store, session_dir) = open_temp_store("metaagent-message-submit-service");
+    let mut session_store = Some(store);
+    let active_session = session_store.as_ref().expect("active session");
+    let baseline_text = r#"[{"id":"existing"}]"#;
+    std::fs::write(active_session.tasks_file(), baseline_text).expect("write baseline tasks");
+
+    let mut pending_task_write_baseline = None;
+    let mut docs_attach_in_flight = false;
+    let mut master_session_intro_needed = true;
+    let mut master_report_session_intro_needed = true;
+    let mut pending_master_message_after_project_info = None;
+    let mut project_info_in_flight = false;
+    let mut project_info_stage = None;
+    let mut project_info_text = Some("existing project context".to_string());
+    let mut master_report_in_flight = false;
+    let mut pending_master_report_prompts = std::collections::VecDeque::new();
+    let mut master_report_transcript = Vec::new();
+    let mut task_check_in_flight = false;
+    let mut task_check_baseline = None;
+
+    let backend = ratatui::backend::TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+
+    submit_user_message(
+        &mut app,
+        "Please plan this change".to_string(),
+        &master_adapter,
+        &master_report_adapter,
+        &project_info_adapter,
+        &mut worker_agent_adapters,
+        &mut active_worker_context_key,
+        &docs_attach_adapter,
+        &test_runner_adapter,
+        &mut master_report_in_flight,
+        &mut pending_master_report_prompts,
+        &mut master_report_transcript,
+        &mut task_check_in_flight,
+        &mut task_check_baseline,
+        &mut session_store,
+        &cwd,
+        &mut terminal,
+        &mut pending_task_write_baseline,
+        &mut docs_attach_in_flight,
+        &mut master_session_intro_needed,
+        &mut master_report_session_intro_needed,
+        &mut pending_master_message_after_project_info,
+        &mut project_info_in_flight,
+        &mut project_info_stage,
+        &mut project_info_text,
+        &model_routing,
+    )
+    .expect("message submit should succeed");
+
+    assert!(app.is_master_in_progress());
+    assert!(!master_session_intro_needed);
+    assert!(!project_info_in_flight);
+    assert!(pending_master_message_after_project_info.is_none());
+    assert_eq!(
+        pending_task_write_baseline
+            .as_ref()
+            .map(|baseline| baseline.tasks_json.as_str()),
+        Some(baseline_text)
+    );
+
+    std::fs::remove_dir_all(session_dir).ok();
+}
+
+#[test]
+fn start_submit_claims_first_job_and_persists_snapshot_via_service() {
+    let mut app = App::default();
+    app.sync_planner_tasks_from_file(simple_execution_plan())
+        .expect("sync plan");
+    let master_adapter = CodexAdapter::new();
+    let master_report_adapter = CodexAdapter::new();
+    let project_info_adapter = CodexAdapter::new();
+    let docs_attach_adapter = CodexAdapter::new();
+    let test_runner_adapter = TestRunnerAdapter::new();
+    let model_routing = CodexAgentModelRouting::default();
+
+    let mut worker_agent_adapters: HashMap<String, CodexAdapter> = HashMap::new();
+    let mut active_worker_context_key = None;
+    let cwd = std::env::current_dir().expect("cwd");
+    let (store, session_dir) = open_temp_store("metaagent-start-submit-service");
+    let mut session_store = Some(store);
+
+    let mut pending_task_write_baseline = None;
+    let mut docs_attach_in_flight = false;
+    let mut master_session_intro_needed = true;
+    let mut master_report_session_intro_needed = true;
+    let mut pending_master_message_after_project_info = None;
+    let mut project_info_in_flight = false;
+    let mut project_info_stage = None;
+    let mut project_info_text = Some("existing project context".to_string());
+    let mut master_report_in_flight = false;
+    let mut pending_master_report_prompts = std::collections::VecDeque::new();
+    let mut master_report_transcript = Vec::new();
+    let mut task_check_in_flight = false;
+    let mut task_check_baseline = None;
+
+    let backend = ratatui::backend::TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+
+    submit_user_message(
+        &mut app,
+        "/start".to_string(),
+        &master_adapter,
+        &master_report_adapter,
+        &project_info_adapter,
+        &mut worker_agent_adapters,
+        &mut active_worker_context_key,
+        &docs_attach_adapter,
+        &test_runner_adapter,
+        &mut master_report_in_flight,
+        &mut pending_master_report_prompts,
+        &mut master_report_transcript,
+        &mut task_check_in_flight,
+        &mut task_check_baseline,
+        &mut session_store,
+        &cwd,
+        &mut terminal,
+        &mut pending_task_write_baseline,
+        &mut docs_attach_in_flight,
+        &mut master_session_intro_needed,
+        &mut master_report_session_intro_needed,
+        &mut pending_master_message_after_project_info,
+        &mut project_info_in_flight,
+        &mut project_info_stage,
+        &mut project_info_text,
+        &model_routing,
+    )
+    .expect("start submit should succeed");
+
+    let active_session = session_store.as_ref().expect("active session");
+    let persisted = active_session.read_tasks().expect("read tasks");
+    let impl_status = persisted
+        .iter()
+        .find(|entry| entry.id == "impl")
+        .map(|entry| entry.status);
+    assert_eq!(impl_status, Some(PlannerTaskStatusFile::InProgress));
+    assert!(
+        app.left_bottom_lines()
+            .iter()
+            .any(|line| line.contains("Starting Implementor for task #1")),
+        "expected worker dispatch status message after /start"
+    );
+
+    std::fs::remove_dir_all(session_dir).ok();
 }
 
 #[test]

@@ -1,4 +1,23 @@
 use super::*;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn home_env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn unique_temp_home(prefix: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "{prefix}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should work")
+            .as_nanos()
+    ))
+}
 
 #[test]
 fn defaults_use_large_smart_for_all_agent_slots() {
@@ -79,4 +98,55 @@ fn unknown_profile_assignment_falls_back_to_large_smart() {
     let master = routing.profile_for(CodexAgentKind::Master);
     assert_eq!(master.model, "gpt-5.3-codex");
     assert_eq!(master.thinking_effort.as_deref(), Some("medium"));
+}
+
+#[test]
+fn load_from_metaagent_config_creates_default_config_when_missing() {
+    let _guard = home_env_lock().lock().expect("lock HOME mutex");
+    let old_home = std::env::var_os("HOME");
+    let temp_home = unique_temp_home("metaagent-home-default-config");
+    fs::create_dir_all(&temp_home).expect("create temp HOME");
+    unsafe { std::env::set_var("HOME", &temp_home) };
+
+    let routing = CodexAgentModelRouting::load_from_metaagent_config()
+        .expect("loading from missing config should succeed");
+    let config_path = temp_home.join(".metaagent/config.toml");
+    let config_text = fs::read_to_string(&config_path).expect("default config should be created");
+    assert!(config_text.contains("[storage]"));
+    assert!(config_text.contains("[codex.agent_profiles]"));
+    assert_eq!(
+        routing.profile_for(CodexAgentKind::Master).model,
+        "gpt-5.3-codex"
+    );
+
+    match old_home {
+        Some(value) => unsafe { std::env::set_var("HOME", value) },
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    let _ = fs::remove_dir_all(&temp_home);
+}
+
+#[test]
+fn load_from_metaagent_config_reports_invalid_data_for_malformed_file() {
+    let _guard = home_env_lock().lock().expect("lock HOME mutex");
+    let old_home = std::env::var_os("HOME");
+    let temp_home = unique_temp_home("metaagent-home-bad-config");
+    let config_dir = temp_home.join(".metaagent");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("config.toml"),
+        "[codex.model_profiles.bad\n",
+    )
+    .expect("write malformed config");
+    unsafe { std::env::set_var("HOME", &temp_home) };
+
+    let err = CodexAgentModelRouting::load_from_metaagent_config()
+        .expect_err("malformed config should fail");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+
+    match old_home {
+        Some(value) => unsafe { std::env::set_var("HOME", value) },
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    let _ = fs::remove_dir_all(&temp_home);
 }

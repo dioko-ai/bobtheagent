@@ -1,4 +1,6 @@
 use super::*;
+use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn parses_theme_from_toml() {
@@ -29,4 +31,53 @@ active_fg = { r = 22, g = 23, b = 24 }
 fn uses_default_on_missing_file() {
     let theme = Theme::load_or_default("/definitely-not-a-real-theme-file.toml");
     assert_eq!(theme.left_top_bg, Theme::default().left_top_bg);
+}
+
+#[test]
+fn load_or_default_round_trips_valid_theme_file() {
+    let path = std::env::temp_dir().join(format!(
+        "metaagent-theme-{}.toml",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should work")
+            .as_nanos()
+    ));
+    fs::write(
+        &path,
+        r#"
+[colors]
+left_top_bg = { r = 11, g = 12, b = 13 }
+chat_bg = { r = 14, g = 15, b = 16 }
+right_bg = { r = 17, g = 18, b = 19 }
+input_bg = { r = 20, g = 21, b = 22 }
+status_bg = { r = 23, g = 24, b = 25 }
+text_fg = { r = 26, g = 27, b = 28 }
+muted_fg = { r = 29, g = 30, b = 31 }
+active_fg = { r = 32, g = 33, b = 34 }
+"#,
+    )
+    .expect("write theme file");
+
+    let theme = Theme::load_or_default(&path);
+    assert_eq!(theme.left_top_bg, Color::Rgb(11, 12, 13));
+    assert_eq!(theme.active_fg, Color::Rgb(32, 33, 34));
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn load_or_default_falls_back_for_malformed_theme_file() {
+    let path = std::env::temp_dir().join(format!(
+        "metaagent-theme-bad-{}.toml",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should work")
+            .as_nanos()
+    ));
+    fs::write(&path, "[colors]\nleft_top_bg = { r = \"nope\" }\n").expect("write bad theme");
+
+    let theme = Theme::load_or_default(&path);
+    assert_eq!(theme.chat_bg, Theme::default().chat_bg);
+
+    let _ = fs::remove_file(path);
 }

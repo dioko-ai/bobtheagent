@@ -5,6 +5,8 @@ use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
 };
 
+const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppEvent {
     Tick,
@@ -80,7 +82,7 @@ fn map_mouse_event_kind(kind: MouseEventKind) -> AppEvent {
 }
 
 pub fn next_event() -> io::Result<AppEvent> {
-    if event::poll(Duration::from_millis(16))? {
+    if event::poll(EVENT_POLL_INTERVAL)? {
         match event::read()? {
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                 return Ok(map_key_event(key_event));
@@ -100,6 +102,10 @@ pub fn next_event() -> io::Result<AppEvent> {
     }
 
     Ok(AppEvent::Tick)
+}
+
+pub fn has_pending_input() -> io::Result<bool> {
+    event::poll(Duration::from_millis(0))
 }
 
 #[cfg(test)]

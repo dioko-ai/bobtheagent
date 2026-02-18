@@ -1,5 +1,6 @@
 use super::*;
 use crate::session_store::{PlannerTaskKindFile, PlannerTaskStatusFile};
+use crate::text_layout::wrap_word_with_positions;
 use std::sync::Arc;
 
 fn load_default_plan(app: &mut App, top_title: &str) {
@@ -149,9 +150,10 @@ fn pane_focus_cycles_forward_and_backward() {
 fn scrolling_is_bounded_for_each_pane() {
     let mut app = App::default();
     app.active_pane = Pane::LeftTop;
+    let max_left_top_scroll = app.left_top_lines().len().saturating_sub(1) as u16;
 
     for _ in 0..500 {
-        app.scroll_down();
+        app.scroll_left_top_down(max_left_top_scroll);
     }
     assert_eq!(
         app.left_top_scroll(),
@@ -168,8 +170,10 @@ fn scrolling_is_bounded_for_each_pane() {
     assert_eq!(app.left_top_scroll(), 0);
 
     app.active_pane = Pane::LeftBottom;
+    let max_left_bottom_scroll = app.left_bottom_lines().len().saturating_sub(1) as u16;
+
     for _ in 0..500 {
-        app.scroll_down();
+        app.scroll_chat_down(max_left_bottom_scroll);
     }
     assert_eq!(
         app.left_bottom_scroll(),
@@ -177,11 +181,11 @@ fn scrolling_is_bounded_for_each_pane() {
     );
 
     app.active_pane = Pane::Right;
+    let max_right_scroll = app.right_block_lines(80).len().saturating_sub(1) as u16;
     for _ in 0..500 {
-        app.scroll_down();
+        app.scroll_right_down(max_right_scroll);
     }
-    let max_right_scroll = app.right_scroll();
-    app.scroll_down();
+    app.scroll_right_down(max_right_scroll);
     assert_eq!(app.right_scroll(), max_right_scroll);
 }
 
@@ -204,6 +208,40 @@ fn chat_input_and_submit_flow() {
             .expect("chat message expected"),
         "You: h"
     );
+}
+
+#[test]
+fn chat_input_layout_cache_reuses_and_invalidates() {
+    let mut app = App::default();
+    for ch in "hello world".chars() {
+        app.input_char(ch);
+    }
+
+    let cached = app.wrapped_chat_input_layout(5);
+    let reused = app.wrapped_chat_input_layout(5);
+    assert!(Arc::ptr_eq(&cached, &reused));
+
+    app.move_cursor_left();
+    let still_cached = app.wrapped_chat_input_layout(5);
+    assert!(Arc::ptr_eq(&cached, &still_cached));
+
+    app.input_char('!');
+    let refreshed = app.wrapped_chat_input_layout(5);
+    assert!(!Arc::ptr_eq(&cached, &refreshed));
+    assert_eq!(
+        refreshed.rendered,
+        wrap_word_with_positions(app.chat_input(), 5).rendered
+    );
+}
+
+#[test]
+fn chat_message_generation_tracks_new_chat_lines() {
+    let mut app = App::default();
+    assert_eq!(app.chat_messages_generation(), 0);
+    app.push_agent_message("Agent: one");
+    assert_eq!(app.chat_messages_generation(), 1);
+    let _ = app.submit_direct_message("hello");
+    assert_eq!(app.chat_messages_generation(), 2);
 }
 
 #[test]

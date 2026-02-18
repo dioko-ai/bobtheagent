@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::session_store::PlannerTaskFileEntry;
 use crate::subagents;
-use crate::text_layout::wrap_word_with_positions;
+use crate::text_layout::{WrappedText, wrap_word_with_positions};
 use crate::workflow::{RightPaneBlockView, StartedJob, WorkerRole, Workflow, WorkflowFailure};
 
 const COMMAND_INDEX: [(&str, &str); 15] = [
@@ -31,6 +31,13 @@ struct WrappedPaneCache {
     width: u16,
     generation: u64,
     rendered: Arc<String>,
+}
+
+#[derive(Debug, Clone)]
+struct WrappedInputCache {
+    width: u16,
+    generation: u64,
+    wrapped: Arc<WrappedText>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,12 +84,15 @@ pub struct App {
     left_top_generation: u64,
     left_top_wrap_cache: RefCell<Option<WrappedPaneCache>>,
     chat_messages: Vec<String>,
+    chat_messages_generation: u64,
     right_lines: Vec<String>,
     planner_markdown: String,
     left_top_scroll: u16,
     chat_scroll: u16,
     right_scroll: u16,
     chat_input: String,
+    chat_input_generation: u64,
+    chat_input_wrap_cache: RefCell<Option<WrappedInputCache>>,
     chat_cursor: usize,
     chat_cursor_goal_col: Option<u16>,
     last_reported_context: Vec<String>,
@@ -109,6 +119,7 @@ impl Default for App {
             left_top_generation: 0,
             left_top_wrap_cache: RefCell::new(None),
             chat_messages: Vec::new(),
+            chat_messages_generation: 0,
             right_lines: vec![
                 "# Collaborative Planner".to_string(),
                 String::new(),
@@ -121,6 +132,8 @@ impl Default for App {
             chat_scroll: 0,
             right_scroll: 0,
             chat_input: String::new(),
+            chat_input_generation: 0,
+            chat_input_wrap_cache: RefCell::new(None),
             chat_cursor: 0,
             chat_cursor_goal_col: None,
             last_reported_context: Vec::new(),
@@ -164,17 +177,12 @@ impl App {
         *scroll = scroll.saturating_sub(1);
     }
 
-    pub fn scroll_down(&mut self) {
-        let max_scroll = self.max_scroll(self.active_pane);
-        let scroll = self.scroll_mut(self.active_pane);
-        *scroll = (*scroll + 1).min(max_scroll);
-    }
-
     pub fn input_char(&mut self, c: char) {
         let byte_idx = char_to_byte_idx(&self.chat_input, self.chat_cursor);
         self.chat_input.insert(byte_idx, c);
         self.chat_cursor = self.chat_cursor.saturating_add(1);
         self.chat_cursor_goal_col = None;
+        self.invalidate_chat_input_cache();
     }
 
     pub fn backspace_input(&mut self) {
@@ -187,6 +195,7 @@ impl App {
         self.chat_input.drain(start..end);
         self.chat_cursor = self.chat_cursor.saturating_sub(1);
         self.chat_cursor_goal_col = None;
+        self.invalidate_chat_input_cache();
     }
 
     pub fn move_cursor_left(&mut self) {
@@ -201,27 +210,25 @@ impl App {
     }
 
     pub fn move_cursor_up(&mut self, width: u16) {
-        let width = width.max(1);
-        let positions = wrap_word_with_positions(&self.chat_input, width).positions;
+        let positions = &self.wrapped_chat_input_layout(width).positions;
         let (line, col) = positions[self.chat_cursor];
         if line == 0 {
             return;
         }
         let goal_col = self.chat_cursor_goal_col.unwrap_or(col);
-        self.chat_cursor = nearest_index_for_line_col(&positions, line - 1, goal_col);
+        self.chat_cursor = nearest_index_for_line_col(positions, line - 1, goal_col);
         self.chat_cursor_goal_col = Some(goal_col);
     }
 
     pub fn move_cursor_down(&mut self, width: u16) {
-        let width = width.max(1);
-        let positions = wrap_word_with_positions(&self.chat_input, width).positions;
+        let positions = &self.wrapped_chat_input_layout(width).positions;
         let (line, col) = positions[self.chat_cursor];
         let max_line = positions.iter().map(|(l, _)| *l).max().unwrap_or(0);
         if line >= max_line {
             return;
         }
         let goal_col = self.chat_cursor_goal_col.unwrap_or(col);
-        self.chat_cursor = nearest_index_for_line_col(&positions, line + 1, goal_col);
+        self.chat_cursor = nearest_index_for_line_col(positions, line + 1, goal_col);
         self.chat_cursor_goal_col = Some(goal_col);
     }
 
@@ -251,10 +258,11 @@ impl App {
             return None;
         }
 
-        self.chat_messages.push(format!("You: {message}"));
+        self.push_chat_message_line(format!("You: {message}"));
         self.chat_input.clear();
         self.chat_cursor = 0;
         self.chat_cursor_goal_col = None;
+        self.invalidate_chat_input_cache();
         Some(message)
     }
 
@@ -263,15 +271,16 @@ impl App {
         if message.is_empty() {
             return None;
         }
-        self.chat_messages.push(format!("You: {message}"));
+        self.push_chat_message_line(format!("You: {message}"));
         self.chat_input.clear();
         self.chat_cursor = 0;
         self.chat_cursor_goal_col = None;
+        self.invalidate_chat_input_cache();
         Some(message)
     }
 
     pub fn push_agent_message(&mut self, message: impl Into<String>) {
-        self.chat_messages.push(message.into());
+        self.push_chat_message_line(message.into());
     }
 
     pub fn prepare_master_prompt(&self, message: &str, tasks_file: &str) -> String {
@@ -483,7 +492,7 @@ impl App {
     pub fn on_worker_completed(&mut self, success: bool, code: i32) -> Vec<String> {
         let messages = self.workflow.finish_active_job(success, code);
         for message in messages {
-            self.chat_messages.push(message);
+            self.push_chat_message_line(message);
         }
         self.prune_expanded_detail_keys();
         self.refresh_right_lines();
@@ -581,11 +590,37 @@ impl App {
         &self.chat_input
     }
 
+    pub fn wrapped_chat_input_layout(&self, width: u16) -> Arc<WrappedText> {
+        let width = width.max(1);
+        if let Some(cache) = self.chat_input_wrap_cache.borrow().as_ref()
+            && cache.width == width
+            && cache.generation == self.chat_input_generation
+        {
+            return Arc::clone(&cache.wrapped);
+        }
+        let wrapped = Arc::new(wrap_word_with_positions(&self.chat_input, width));
+        *self.chat_input_wrap_cache.borrow_mut() = Some(WrappedInputCache {
+            width,
+            generation: self.chat_input_generation,
+            wrapped: Arc::clone(&wrapped),
+        });
+        wrapped
+    }
+
+    pub fn chat_input_line_count(&self, width: u16) -> u16 {
+        self.wrapped_chat_input_layout(width).line_count
+    }
+
+    pub fn chat_messages_generation(&self) -> u64 {
+        self.chat_messages_generation
+    }
+
     pub fn consume_chat_input_trimmed(&mut self) -> Option<String> {
         let message = self.chat_input.trim().to_string();
         self.chat_input.clear();
         self.chat_cursor = 0;
         self.chat_cursor_goal_col = None;
+        self.invalidate_chat_input_cache();
         if message.is_empty() {
             None
         } else {
@@ -594,7 +629,7 @@ impl App {
     }
 
     pub fn chat_cursor_line_col(&self, width: u16) -> (u16, u16) {
-        let positions = wrap_word_with_positions(&self.chat_input, width.max(1)).positions;
+        let positions = &self.wrapped_chat_input_layout(width).positions;
         positions[self.chat_cursor]
     }
 
@@ -626,6 +661,7 @@ impl App {
         self.chat_input = top.command.to_string();
         self.chat_cursor = self.chat_input.chars().count();
         self.chat_cursor_goal_col = None;
+        self.invalidate_chat_input_cache();
         true
     }
 
@@ -666,6 +702,13 @@ impl App {
 
     pub fn is_master_in_progress(&self) -> bool {
         self.master_in_progress
+    }
+
+    pub fn is_any_agent_in_progress(&self) -> bool {
+        self.master_in_progress
+            || self.task_check_in_progress
+            || self.docs_attach_in_progress
+            || self.is_execution_busy()
     }
 
     pub fn resume_picker_options(&self) -> &[ResumeSessionOption] {
@@ -788,6 +831,16 @@ impl App {
         }
         self.left_top_generation = self.left_top_generation.saturating_add(1);
         self.left_top_scroll = self.max_scroll(Pane::LeftTop);
+    }
+
+    fn push_chat_message_line(&mut self, message: String) {
+        self.chat_messages.push(message);
+        self.chat_messages_generation = self.chat_messages_generation.saturating_add(1);
+    }
+
+    fn invalidate_chat_input_cache(&mut self) {
+        self.chat_input_generation = self.chat_input_generation.saturating_add(1);
+        *self.chat_input_wrap_cache.borrow_mut() = None;
     }
 
     fn scroll_mut(&mut self, pane: Pane) -> &mut u16 {

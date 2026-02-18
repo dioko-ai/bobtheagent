@@ -1,4 +1,3 @@
-use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -6,7 +5,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::default_config::DEFAULT_CONFIG_TOML;
+use crate::artifact_io::{
+    ensure_default_metaagent_config, home_dir, read_text_file, write_text_file,
+    write_text_file_if_missing,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -205,7 +207,7 @@ impl SessionStore {
     }
 
     pub fn read_tasks(&self) -> io::Result<Vec<PlannerTaskFileEntry>> {
-        let text = fs::read_to_string(&self.tasks_file)?;
+        let text = read_text_file(&self.tasks_file)?;
         let parsed = serde_json::from_str::<Vec<PlannerTaskFileEntry>>(&text)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         Ok(parsed)
@@ -216,16 +218,16 @@ impl SessionStore {
     }
 
     pub fn read_planner_markdown(&self) -> io::Result<String> {
-        fs::read_to_string(&self.planner_file)
+        read_text_file(&self.planner_file)
     }
 
     pub fn write_rolling_context(&self, entries: &[String]) -> io::Result<()> {
         let text = serde_json::to_string_pretty(entries).map_err(io::Error::other)?;
-        fs::write(&self.context_file, text)
+        write_text_file(&self.context_file, &text)
     }
 
     pub fn read_rolling_context(&self) -> io::Result<Vec<String>> {
-        let text = fs::read_to_string(&self.context_file)?;
+        let text = read_text_file(&self.context_file)?;
         let parsed = serde_json::from_str::<Vec<String>>(&text)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         Ok(parsed)
@@ -236,7 +238,7 @@ impl SessionStore {
     }
 
     pub fn read_task_fails(&self) -> io::Result<Vec<TaskFailFileEntry>> {
-        let text = fs::read_to_string(&self.task_fails_file)?;
+        let text = read_text_file(&self.task_fails_file)?;
         let parsed = serde_json::from_str::<Vec<TaskFailFileEntry>>(&text)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         Ok(parsed)
@@ -249,7 +251,7 @@ impl SessionStore {
         let mut existing = self.read_task_fails().unwrap_or_default();
         existing.extend_from_slice(entries);
         let text = serde_json::to_string_pretty(&existing).map_err(io::Error::other)?;
-        fs::write(&self.task_fails_file, text)
+        write_text_file(&self.task_fails_file, &text)
     }
 
     pub fn project_info_file(&self) -> &Path {
@@ -261,43 +263,33 @@ impl SessionStore {
     }
 
     pub fn read_project_info(&self) -> io::Result<String> {
-        fs::read_to_string(&self.project_info_file)
+        read_text_file(&self.project_info_file)
     }
 
     pub fn write_project_info(&self, markdown: &str) -> io::Result<()> {
-        fs::write(&self.project_info_file, markdown)
+        write_text_file(&self.project_info_file, markdown)
     }
 
     pub fn read_session_meta(&self) -> io::Result<SessionMetaFile> {
-        let text = fs::read_to_string(&self.session_meta_file)?;
+        let text = read_text_file(&self.session_meta_file)?;
         serde_json::from_str::<SessionMetaFile>(&text)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
 
     fn bootstrap_files(&self, cwd: &Path, now_secs: u64) -> io::Result<()> {
-        if !self.tasks_file.exists() {
-            fs::write(&self.tasks_file, "[]\n")?;
-        }
-        if !self.planner_file.exists() {
-            fs::write(&self.planner_file, "")?;
-        }
-        if !self.context_file.exists() {
-            fs::write(&self.context_file, "[]\n")?;
-        }
-        if !self.task_fails_file.exists() {
-            fs::write(&self.task_fails_file, "[]\n")?;
-        }
-        if !self.project_info_file.exists() {
-            fs::write(&self.project_info_file, "")?;
-        }
-        if !self.metadata_file.exists() {
+        write_text_file_if_missing(&self.tasks_file, "[]\n")?;
+        write_text_file_if_missing(&self.planner_file, "")?;
+        write_text_file_if_missing(&self.context_file, "[]\n")?;
+        write_text_file_if_missing(&self.task_fails_file, "[]\n")?;
+        write_text_file_if_missing(&self.project_info_file, "")?;
+        if write_text_file_if_missing(&self.metadata_file, "")? {
             let metadata = SessionMetadata {
                 workspace: cwd.to_string_lossy().to_string(),
                 created_at_epoch_secs: now_secs,
                 last_used_epoch_secs: now_secs,
             };
             let text = serde_json::to_string_pretty(&metadata).map_err(io::Error::other)?;
-            fs::write(&self.metadata_file, text)?;
+            write_text_file(&self.metadata_file, &text)?;
         }
         Ok(())
     }
@@ -325,7 +317,7 @@ impl SessionStore {
         }
         metadata.last_used_epoch_secs = now_secs;
         let text = serde_json::to_string_pretty(&metadata).map_err(io::Error::other)?;
-        fs::write(&self.metadata_file, text)
+        write_text_file(&self.metadata_file, &text)
     }
 }
 
@@ -354,7 +346,7 @@ fn create_unique_session_dir(
 }
 
 fn read_metadata_file(path: &Path) -> io::Result<SessionMetadata> {
-    let text = fs::read_to_string(path)?;
+    let text = read_text_file(path)?;
     let metadata = serde_json::from_str::<SessionMetadata>(&text)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
     Ok(metadata)
@@ -403,16 +395,8 @@ fn list_sessions_in_root(root_dir: &Path) -> io::Result<Vec<SessionListEntry>> {
 }
 
 fn load_config() -> io::Result<MetaAgentConfig> {
-    let home = home_dir()?;
-    let config_dir = home.join(".metaagent");
-    fs::create_dir_all(&config_dir)?;
-    let config_file = config_dir.join("config.toml");
-
-    if !config_file.exists() {
-        fs::write(&config_file, DEFAULT_CONFIG_TOML)?;
-    }
-
-    let text = fs::read_to_string(config_file)?;
+    let config_file = ensure_default_metaagent_config()?;
+    let text = read_text_file(&config_file)?;
     let parsed = toml::from_str::<MetaAgentConfig>(&text)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
     Ok(parsed)
@@ -426,12 +410,6 @@ fn expand_home(raw_path: &str) -> io::Result<PathBuf> {
         return Ok(home_dir()?.join(rest));
     }
     Ok(PathBuf::from(raw_path))
-}
-
-fn home_dir() -> io::Result<PathBuf> {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))
 }
 
 #[derive(Deserialize)]

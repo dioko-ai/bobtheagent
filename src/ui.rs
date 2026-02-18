@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::path::Path;
+use std::sync::Arc;
 
 use ratatui::prelude::*;
 use ratatui::text::{Line, Span, Text};
@@ -15,6 +17,17 @@ const TITLE_BAR_HEIGHT: u16 = 3;
 const ACTIVE_TITLE_BG: Color = Color::Rgb(90, 145, 200);
 const ACTIVE_TITLE_FG: Color = Color::Black;
 const STATUS_HELP_TEXT: &str = "Tab/Shift+Tab focus | Ctrl+U/Ctrl+D or PgUp/PgDn scroll main right pane | Wheel scrolls focused pane";
+
+#[derive(Debug, Clone)]
+struct ChatLinesCache {
+    width: u16,
+    generation: u64,
+    lines: Arc<Vec<ChatDisplayLine>>,
+}
+
+thread_local! {
+    static CHAT_LINES_CACHE: RefCell<Option<ChatLinesCache>> = const { RefCell::new(None) };
+}
 
 pub fn chat_input_text_width(screen: Rect) -> u16 {
     let [body, _status] =
@@ -45,15 +58,15 @@ pub fn chat_max_scroll(screen: Rect, app: &App) -> u16 {
     }
 
     let input_text_width = content.width.saturating_sub(TEXT_PADDING * 2).max(1);
-    let input_text_lines = wrap_word_with_positions(app.chat_input(), input_text_width).line_count;
+    let input_text_lines = app.chat_input_line_count(input_text_width);
     let max_input_height = content.height.saturating_sub(1).max(1);
     let (input_height, _) = input_box_metrics(input_text_lines, 0, max_input_height);
     let [messages_area, _input_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(input_height)]).areas(content);
 
     let visible_message_lines = messages_area.height.saturating_sub(TEXT_PADDING * 2);
-    let total_message_lines = chat_display_lines(
-        app.left_bottom_lines(),
+    let total_message_lines = cached_chat_display_lines(
+        app,
         content.width.saturating_sub(TEXT_PADDING * 2).max(1),
     )
     .len() as u16;
@@ -149,7 +162,7 @@ pub fn render(frame: &mut Frame, app: &App, theme: &Theme) {
         Block::default().style(Style::default().bg(theme.status_bg)),
         status,
     );
-    let help = Paragraph::new(status_line_text(app))
+    let help = Paragraph::new(status_line_text())
         .style(Style::default().bg(theme.status_bg).fg(theme.muted_fg))
         .block(
             Block::default()
@@ -209,16 +222,8 @@ fn render_worker_output_pane(
     );
 }
 
-fn status_line_text(app: &App) -> String {
-    if app.is_master_in_progress() {
-        format!(
-            "{} | Master working {}",
-            STATUS_HELP_TEXT,
-            master_working_dots(app.ticks)
-        )
-    } else {
-        STATUS_HELP_TEXT.to_string()
-    }
+fn status_line_text() -> String {
+    STATUS_HELP_TEXT.to_string()
 }
 
 fn master_working_dots(ticks: u64) -> &'static str {
@@ -262,7 +267,7 @@ fn render_chat_pane(frame: &mut Frame, area: Rect, app: &App, active: bool, them
         title_area,
     );
     frame.render_widget(
-        Paragraph::new("Agent Chat")
+        Paragraph::new(chat_title_text(app))
             .style(Style::default().bg(title_bg).fg(title_fg))
             .block(
                 Block::default()
@@ -281,7 +286,7 @@ fn render_chat_pane(frame: &mut Frame, area: Rect, app: &App, active: bool, them
     }
 
     let input_text_width = content.width.saturating_sub(TEXT_PADDING * 2).max(1);
-    let wrapped_input_layout = wrap_word_with_positions(app.chat_input(), input_text_width);
+    let wrapped_input_layout = app.wrapped_chat_input_layout(input_text_width);
     let input_text_lines = wrapped_input_layout.line_count;
     let (cursor_line, cursor_col) = app.chat_cursor_line_col(input_text_width.max(1));
     let max_input_height = content.height.saturating_sub(1).max(1);
@@ -291,11 +296,9 @@ fn render_chat_pane(frame: &mut Frame, area: Rect, app: &App, active: bool, them
     let [messages_area, input_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(input_height)]).areas(content);
 
-    let message_lines = chat_display_lines(
-        app.left_bottom_lines(),
-        messages_area.width.saturating_sub(TEXT_PADDING * 2).max(1),
-    );
-    let message_text = chat_text(&message_lines, theme);
+    let message_lines =
+        cached_chat_display_lines(app, messages_area.width.saturating_sub(TEXT_PADDING * 2).max(1));
+    let message_text = chat_text(message_lines.as_ref(), theme);
     let messages = Paragraph::new(message_text)
         .scroll((
             app.left_bottom_scroll()
@@ -310,7 +313,7 @@ fn render_chat_pane(frame: &mut Frame, area: Rect, app: &App, active: bool, them
         );
     frame.render_widget(messages, messages_area);
 
-    let input = Paragraph::new(wrapped_input_layout.rendered)
+    let input = Paragraph::new(wrapped_input_layout.rendered.as_str())
         .block(
             Block::default()
                 .style(Style::default().bg(theme.input_bg))
@@ -397,6 +400,14 @@ fn render_command_index(
             ),
         overlay,
     );
+}
+
+fn chat_title_text(app: &App) -> String {
+    if app.is_any_agent_in_progress() {
+        format!("Agent Chat | Working {}", master_working_dots(app.ticks))
+    } else {
+        "Agent Chat".to_string()
+    }
 }
 
 fn render_resume_picker(frame: &mut Frame, app: &App, theme: &Theme) {
@@ -501,6 +512,27 @@ struct ChatDisplayLine {
     body: String,
     show_label: bool,
     is_separator: bool,
+}
+
+fn cached_chat_display_lines(app: &App, width: u16) -> Arc<Vec<ChatDisplayLine>> {
+    let width = width.max(1);
+    let generation = app.chat_messages_generation();
+    CHAT_LINES_CACHE.with(|cache_cell| {
+        if let Some(cache) = cache_cell.borrow().as_ref()
+            && cache.width == width
+            && cache.generation == generation
+        {
+            return Arc::clone(&cache.lines);
+        }
+
+        let lines = Arc::new(chat_display_lines(app.left_bottom_lines(), width));
+        *cache_cell.borrow_mut() = Some(ChatLinesCache {
+            width,
+            generation,
+            lines: Arc::clone(&lines),
+        });
+        lines
+    })
 }
 
 fn chat_display_lines(messages: &[String], width: u16) -> Vec<ChatDisplayLine> {

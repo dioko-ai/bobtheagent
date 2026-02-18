@@ -163,6 +163,30 @@ fn open_existing_supports_rolling_context_round_trip() {
 }
 
 #[test]
+fn open_existing_supports_project_info_round_trip() {
+    let base = std::env::temp_dir().join(format!(
+        "metaagent-session-project-info-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should work")
+            .as_nanos()
+    ));
+    let session_dir = base.join("session-a");
+    fs::create_dir_all(&session_dir).expect("session dir");
+    let cwd = std::env::current_dir().expect("cwd");
+    let store = SessionStore::open_existing(&cwd, &session_dir).expect("open existing");
+
+    let markdown = "# Project\n\n- Rust app\n";
+    store
+        .write_project_info(markdown)
+        .expect("write project info");
+    let read_back = store.read_project_info().expect("read project info");
+    assert_eq!(read_back, markdown);
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
 fn create_unique_session_dir_avoids_same_second_workspace_collision() {
     let base = std::env::temp_dir().join(format!(
         "metaagent-session-unique-{}",
@@ -214,6 +238,91 @@ fn task_fails_round_trip_append() {
     assert_eq!(read_back.len(), 1);
     assert_eq!(read_back[0].kind, "audit");
     assert_eq!(read_back[0].top_task_id, 1);
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn read_rolling_context_reports_invalid_json() {
+    let base = std::env::temp_dir().join(format!(
+        "metaagent-session-bad-context-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should work")
+            .as_nanos()
+    ));
+    let session_dir = base.join("session-a");
+    fs::create_dir_all(&session_dir).expect("session dir");
+    let cwd = std::env::current_dir().expect("cwd");
+    let store = SessionStore::open_existing(&cwd, &session_dir).expect("open existing");
+
+    fs::write(session_dir.join("rolling_context.json"), "{ invalid json")
+        .expect("write malformed context");
+    let err = store
+        .read_rolling_context()
+        .expect_err("malformed rolling_context.json should fail");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn append_task_fails_recovers_from_malformed_existing_file() {
+    let base = std::env::temp_dir().join(format!(
+        "metaagent-session-bad-fails-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should work")
+            .as_nanos()
+    ));
+    let session_dir = base.join("session-a");
+    fs::create_dir_all(&session_dir).expect("session dir");
+    let cwd = std::env::current_dir().expect("cwd");
+    let store = SessionStore::open_existing(&cwd, &session_dir).expect("open existing");
+
+    fs::write(store.task_fails_file(), "{ invalid json").expect("write malformed task-fails");
+    store
+        .append_task_fails(&[TaskFailFileEntry {
+            kind: "test".to_string(),
+            top_task_id: 9,
+            top_task_title: "Top".to_string(),
+            attempts: 1,
+            reason: "reason".to_string(),
+            action_taken: "action".to_string(),
+            created_at_epoch_secs: 456,
+        }])
+        .expect("append should recover from malformed file");
+    let read_back = store.read_task_fails().expect("read repaired fails");
+    assert_eq!(read_back.len(), 1);
+    assert_eq!(read_back[0].top_task_id, 9);
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn read_session_meta_reports_missing_or_malformed_files() {
+    let base = std::env::temp_dir().join(format!(
+        "metaagent-session-bad-meta-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should work")
+            .as_nanos()
+    ));
+    let session_dir = base.join("session-a");
+    fs::create_dir_all(&session_dir).expect("session dir");
+    let cwd = std::env::current_dir().expect("cwd");
+    let store = SessionStore::open_existing(&cwd, &session_dir).expect("open existing");
+
+    let missing = store
+        .read_session_meta()
+        .expect_err("missing meta.json should fail");
+    assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
+
+    fs::write(store.session_meta_file(), "{ invalid json").expect("write malformed meta");
+    let malformed = store
+        .read_session_meta()
+        .expect_err("malformed meta.json should fail");
+    assert_eq!(malformed.kind(), std::io::ErrorKind::InvalidData);
 
     let _ = fs::remove_dir_all(&base);
 }
