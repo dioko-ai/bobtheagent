@@ -402,6 +402,7 @@ fn build_new_session_args(config: &CodexCommandConfig) -> Vec<String> {
             if matches!(config.output_mode, AdapterOutputMode::JsonAssistantOnly) {
                 args.push("--output-format".to_string());
                 args.push("stream-json".to_string());
+                args.push("--verbose".to_string());
             }
             append_claude_model_selection_args(&mut args, config.model.as_deref());
             args.push("-p".to_string());
@@ -430,6 +431,7 @@ fn build_resume_args(config: &CodexCommandConfig) -> Vec<String> {
             if matches!(config.output_mode, AdapterOutputMode::JsonAssistantOnly) {
                 args.push("--output-format".to_string());
                 args.push("stream-json".to_string());
+                args.push("--verbose".to_string());
             }
             append_claude_model_selection_args(&mut args, config.model.as_deref());
             args
