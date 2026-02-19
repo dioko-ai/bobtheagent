@@ -2201,6 +2201,38 @@ fn apply_backend_selection_persists_and_reports_success() {
         let mut app = App::default();
         let mut selected_backend = BackendKind::Codex;
         let mut model_routing = CodexAgentModelRouting::default();
+        let mut master_adapter = build_json_persistent_adapter(
+            &model_routing,
+            selected_backend,
+            CodexAgentKind::Master,
+        );
+        let mut master_report_adapter = build_json_persistent_adapter(
+            &model_routing,
+            selected_backend,
+            CodexAgentKind::MasterReport,
+        );
+        let mut project_info_adapter = build_json_persistent_adapter(
+            &model_routing,
+            selected_backend,
+            CodexAgentKind::ProjectInfo,
+        );
+        let mut docs_attach_adapter = build_plain_adapter(
+            &model_routing,
+            selected_backend,
+            CodexAgentKind::DocsAttach,
+            false,
+        );
+        let mut task_check_adapter = build_plain_adapter(
+            &model_routing,
+            selected_backend,
+            CodexAgentKind::TaskCheck,
+            false,
+        );
+        let mut active_worker_context_key = Some("top:42".to_string());
+        let mut worker_agent_adapters: HashMap<String, CodexAdapter> =
+            [("top:42".to_string(), CodexAdapter::new())]
+                .into_iter()
+                .collect();
 
         apply_backend_selection(
             &mut app,
@@ -2211,6 +2243,13 @@ fn apply_backend_selection_persists_and_reports_success() {
             },
             &mut selected_backend,
             &mut model_routing,
+            &mut active_worker_context_key,
+            &mut worker_agent_adapters,
+            &mut master_adapter,
+            &mut master_report_adapter,
+            &mut project_info_adapter,
+            &mut docs_attach_adapter,
+            &mut task_check_adapter,
         );
 
         assert_eq!(selected_backend, BackendKind::Claude);
@@ -2218,6 +2257,14 @@ fn apply_backend_selection_persists_and_reports_success() {
             model_routing.base_command_config().backend_kind(),
             BackendKind::Claude
         );
+        let expected_program = model_routing.base_command_config().program;
+        assert_eq!(master_adapter.program(), expected_program);
+        assert_eq!(master_report_adapter.program(), expected_program);
+        assert_eq!(project_info_adapter.program(), expected_program);
+        assert_eq!(docs_attach_adapter.program(), expected_program);
+        assert_eq!(task_check_adapter.program(), expected_program);
+        assert!(active_worker_context_key.is_none());
+        assert!(worker_agent_adapters.is_empty());
         let last = app.left_bottom_lines().last().expect("status message");
         assert!(last.contains("Backend set to Claude. Saved to"));
         assert!(last.contains("New adapters will use this backend."));
@@ -2234,6 +2281,38 @@ fn apply_backend_selection_persist_failure_keeps_in_memory_backend_and_reports_f
         let mut app = App::default();
         let mut selected_backend = BackendKind::Codex;
         let mut model_routing = CodexAgentModelRouting::default();
+        let mut master_adapter = build_json_persistent_adapter(
+            &model_routing,
+            selected_backend,
+            CodexAgentKind::Master,
+        );
+        let mut master_report_adapter = build_json_persistent_adapter(
+            &model_routing,
+            selected_backend,
+            CodexAgentKind::MasterReport,
+        );
+        let mut project_info_adapter = build_json_persistent_adapter(
+            &model_routing,
+            selected_backend,
+            CodexAgentKind::ProjectInfo,
+        );
+        let mut docs_attach_adapter = build_plain_adapter(
+            &model_routing,
+            selected_backend,
+            CodexAgentKind::DocsAttach,
+            false,
+        );
+        let mut task_check_adapter = build_plain_adapter(
+            &model_routing,
+            selected_backend,
+            CodexAgentKind::TaskCheck,
+            false,
+        );
+        let mut active_worker_context_key = Some("top:42".to_string());
+        let mut worker_agent_adapters: HashMap<String, CodexAdapter> =
+            [("top:42".to_string(), CodexAdapter::new())]
+                .into_iter()
+                .collect();
 
         apply_backend_selection(
             &mut app,
@@ -2244,6 +2323,13 @@ fn apply_backend_selection_persist_failure_keeps_in_memory_backend_and_reports_f
             },
             &mut selected_backend,
             &mut model_routing,
+            &mut active_worker_context_key,
+            &mut worker_agent_adapters,
+            &mut master_adapter,
+            &mut master_report_adapter,
+            &mut project_info_adapter,
+            &mut docs_attach_adapter,
+            &mut task_check_adapter,
         );
 
         assert_eq!(selected_backend, BackendKind::Claude);
@@ -2251,6 +2337,14 @@ fn apply_backend_selection_persist_failure_keeps_in_memory_backend_and_reports_f
             model_routing.base_command_config().backend_kind(),
             BackendKind::Claude
         );
+        let expected_program = model_routing.base_command_config().program;
+        assert_eq!(master_adapter.program(), expected_program);
+        assert_eq!(master_report_adapter.program(), expected_program);
+        assert_eq!(project_info_adapter.program(), expected_program);
+        assert_eq!(docs_attach_adapter.program(), expected_program);
+        assert_eq!(task_check_adapter.program(), expected_program);
+        assert!(active_worker_context_key.is_none());
+        assert!(worker_agent_adapters.is_empty());
         let last = app.left_bottom_lines().last().expect("status message");
         assert!(last.contains("Backend set to Claude for this run"));
         assert!(last.contains("persistence to ~/.metaagent/config.toml failed"));

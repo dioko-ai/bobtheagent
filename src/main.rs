@@ -215,20 +215,20 @@ fn run_app(
         }
     };
     let mut selected_backend = model_routing.base_command_config().backend_kind();
-    let master_adapter = build_json_persistent_adapter(
+    let mut master_adapter = build_json_persistent_adapter(
         &model_routing,
         selected_backend,
         CodexAgentKind::Master,
     );
-    let master_report_adapter =
+    let mut master_report_adapter =
         build_json_persistent_adapter(&model_routing, selected_backend, CodexAgentKind::MasterReport);
-    let project_info_adapter =
+    let mut project_info_adapter =
         build_json_persistent_adapter(&model_routing, selected_backend, CodexAgentKind::ProjectInfo);
     let mut worker_agent_adapters: HashMap<String, CodexAdapter> = HashMap::new();
     let mut active_worker_context_key: Option<String> = None;
-    let docs_attach_adapter =
+    let mut docs_attach_adapter =
         build_plain_adapter(&model_routing, selected_backend, CodexAgentKind::DocsAttach, false);
-    let task_check_adapter =
+    let mut task_check_adapter =
         build_plain_adapter(&model_routing, selected_backend, CodexAgentKind::TaskCheck, false);
     let test_runner_adapter = TestRunnerAdapter::new();
     let mut master_transcript: Vec<String> = Vec::new();
@@ -1069,6 +1069,13 @@ fn run_app(
                             selection,
                             &mut selected_backend,
                             &mut model_routing,
+                            &mut active_worker_context_key,
+                            &mut worker_agent_adapters,
+                            &mut master_adapter,
+                            &mut master_report_adapter,
+                            &mut project_info_adapter,
+                            &mut docs_attach_adapter,
+                            &mut task_check_adapter,
                         );
                     }
                 } else if app.active_pane == Pane::LeftBottom {
@@ -1157,6 +1164,13 @@ fn run_app(
                             selection,
                             &mut selected_backend,
                             &mut model_routing,
+                            &mut active_worker_context_key,
+                            &mut worker_agent_adapters,
+                            &mut master_adapter,
+                            &mut master_report_adapter,
+                            &mut project_info_adapter,
+                            &mut docs_attach_adapter,
+                            &mut task_check_adapter,
                         );
                     }
                 } else if app.active_pane == Pane::Right && app.is_planner_mode() {
@@ -2302,6 +2316,44 @@ fn persist_backend_selection(selected_backend: BackendKind) -> io::Result<std::p
     Ok(config_file)
 }
 
+fn rebuild_runtime_adapters(
+    model_routing: &CodexAgentModelRouting,
+    selected_backend: BackendKind,
+    master_adapter: &mut CodexAdapter,
+    master_report_adapter: &mut CodexAdapter,
+    project_info_adapter: &mut CodexAdapter,
+    docs_attach_adapter: &mut CodexAdapter,
+    task_check_adapter: &mut CodexAdapter,
+    active_worker_context_key: &mut Option<String>,
+    worker_agent_adapters: &mut HashMap<String, CodexAdapter>,
+) {
+    *master_adapter = build_json_persistent_adapter(model_routing, selected_backend, CodexAgentKind::Master);
+    *master_report_adapter = build_json_persistent_adapter(
+        model_routing,
+        selected_backend,
+        CodexAgentKind::MasterReport,
+    );
+    *project_info_adapter = build_json_persistent_adapter(
+        model_routing,
+        selected_backend,
+        CodexAgentKind::ProjectInfo,
+    );
+    *docs_attach_adapter = build_plain_adapter(
+        model_routing,
+        selected_backend,
+        CodexAgentKind::DocsAttach,
+        false,
+    );
+    *task_check_adapter = build_plain_adapter(
+        model_routing,
+        selected_backend,
+        CodexAgentKind::TaskCheck,
+        false,
+    );
+    worker_agent_adapters.clear();
+    *active_worker_context_key = None;
+}
+
 fn rebuild_model_routing_with_backend_selection(
     model_routing: &mut CodexAgentModelRouting,
     selected_backend: BackendKind,
@@ -2317,6 +2369,13 @@ fn apply_backend_selection(
     selected: BackendOption,
     selected_backend: &mut BackendKind,
     model_routing: &mut CodexAgentModelRouting,
+    active_worker_context_key: &mut Option<String>,
+    worker_agent_adapters: &mut HashMap<String, CodexAdapter>,
+    master_adapter: &mut CodexAdapter,
+    master_report_adapter: &mut CodexAdapter,
+    project_info_adapter: &mut CodexAdapter,
+    docs_attach_adapter: &mut CodexAdapter,
+    task_check_adapter: &mut CodexAdapter,
 ) {
     let target = selected.kind;
     let was = *selected_backend;
@@ -2336,6 +2395,17 @@ fn apply_backend_selection(
         ))
         .unwrap_or_default();
     }
+    rebuild_runtime_adapters(
+        model_routing,
+        target,
+        master_adapter,
+        master_report_adapter,
+        project_info_adapter,
+        docs_attach_adapter,
+        task_check_adapter,
+        active_worker_context_key,
+        worker_agent_adapters,
+    );
 
     match persist_backend_selection(target) {
         Ok(config_file) => app.push_agent_message(format!(

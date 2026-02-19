@@ -209,6 +209,11 @@ impl CodexAdapter {
     }
 
     #[cfg(test)]
+    pub fn program(&self) -> &str {
+        &self.config.program
+    }
+
+    #[cfg(test)]
     pub fn drain_events(&self) -> Vec<AgentEvent> {
         self.drain_events_limited(usize::MAX)
     }
