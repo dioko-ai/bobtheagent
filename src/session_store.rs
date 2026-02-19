@@ -218,6 +218,10 @@ impl SessionStore {
         fs::read_to_string(&self.planner_file)
     }
 
+    pub fn write_planner_markdown(&self, markdown: &str) -> io::Result<()> {
+        fs::write(&self.planner_file, markdown)
+    }
+
     pub fn write_rolling_context(&self, entries: &[String]) -> io::Result<()> {
         let text = serde_json::to_string_pretty(entries).map_err(io::Error::other)?;
         fs::write(&self.context_file, text)
@@ -649,6 +653,30 @@ mod tests {
             .expect("write context");
         let read_back = store.read_rolling_context().expect("read context");
         assert_eq!(read_back, vec!["one".to_string(), "two".to_string()]);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn planner_markdown_round_trip_write_and_read() {
+        let base = std::env::temp_dir().join(format!(
+            "metaagent-session-planner-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should work")
+                .as_nanos()
+        ));
+        let session_dir = base.join("session-a");
+        fs::create_dir_all(&session_dir).expect("session dir");
+        let cwd = std::env::current_dir().expect("cwd");
+        let store = SessionStore::open_existing(&cwd, &session_dir).expect("open existing");
+
+        let markdown = "# Plan\n\n- [ ] Build feature";
+        store
+            .write_planner_markdown(markdown)
+            .expect("write planner markdown");
+        let read_back = store.read_planner_markdown().expect("read planner markdown");
+        assert_eq!(read_back, markdown);
 
         let _ = fs::remove_dir_all(&base);
     }
