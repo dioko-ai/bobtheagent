@@ -289,6 +289,13 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
                         let _ = tx.send(AgentEvent::Output(text));
                     } else if let Some(system_line) = parse_system_message_from_jsonl_line(&line) {
                         let _ = tx.send(AgentEvent::System(system_line));
+                    } else if !is_stderr
+                        && !looks_like_json_line(&line)
+                        && !line.trim().is_empty()
+                    {
+                        // Some adapters occasionally emit plaintext lines even in JSON mode.
+                        // Surface these lines instead of dropping potentially user-facing content.
+                        let _ = tx.send(AgentEvent::Output(line));
                     } else if is_stderr {
                         let _ = tx.send(AgentEvent::System(line));
                     }
@@ -300,7 +307,8 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
 
 fn parse_agent_message_from_jsonl_line(line: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
-    match value.get("type")?.as_str()? {
+    let kind = value.get("type").and_then(|value| value.as_str()).unwrap_or("");
+    match kind {
         "item.completed" => {
             let item = value.get("item")?;
             if item.get("type")?.as_str()? != "agent_message" {
@@ -312,19 +320,78 @@ fn parse_agent_message_from_jsonl_line(line: &str) -> Option<String> {
             let message = value.get("message")?;
             parse_text_from_message_content(message)
         }
-        "result" => value.get("result")?.as_str().map(ToString::to_string),
-        "stream_event" => {
-            let event = value.get("event")?;
-            let delta = event.get("delta")?;
-            if delta.get("type").and_then(|value| value.as_str()) == Some("text_delta") {
-                delta.get("text")?.as_str().map(ToString::to_string)
-            } else if delta.get("type").and_then(|value| value.as_str()) == Some("text") {
-                delta.get("text").and_then(|text| text.as_str()).map(ToString::to_string)
-            } else {
-                None
+        "result" => {
+            if let Some(text) = value.get("result").and_then(|value| value.as_str()) {
+                return Some(text.to_string());
             }
+            if let Some(text) = value
+                .get("result")
+                .and_then(parse_text_from_message_content)
+                .filter(|text| !text.is_empty())
+            {
+                return Some(text);
+            }
+            None
         }
-        _ => None,
+        "stream_event" => {
+            if let Some(text) = parse_text_delta_from_value(&value) {
+                return Some(text);
+            }
+            if let Some(text) = parse_text_content_block_from_value(&value) {
+                return Some(text);
+            }
+            value
+                .get("event")
+                .and_then(|event| event.get("message"))
+                .and_then(parse_text_from_message_content)
+        }
+        "content_block_delta" | "message_delta" => parse_text_delta_from_value(&value),
+        "content_block_start" => parse_text_content_block_from_value(&value),
+        "message" => parse_text_from_message_content(&value),
+        "assistant_message" => value
+            .get("message")
+            .and_then(parse_text_from_message_content),
+        _ => {
+            if let Some(text) = parse_text_delta_from_value(&value) {
+                return Some(text);
+            }
+            if let Some(text) = parse_text_content_block_from_value(&value) {
+                return Some(text);
+            }
+            value.get("message").and_then(parse_text_from_message_content)
+        }
+    }
+}
+
+fn parse_text_delta_from_value(value: &serde_json::Value) -> Option<String> {
+    let delta = value
+        .get("delta")
+        .or_else(|| value.get("event").and_then(|event| event.get("delta")))?;
+    let delta_type = delta.get("type").and_then(|value| value.as_str());
+    if delta_type == Some("text_delta") || delta_type == Some("text") {
+        let text = delta.get("text").and_then(|value| value.as_str())?;
+        if text.is_empty() {
+            None
+        } else {
+            Some(text.to_string())
+        }
+    } else {
+        None
+    }
+}
+
+fn parse_text_content_block_from_value(value: &serde_json::Value) -> Option<String> {
+    let block = value
+        .get("content_block")
+        .or_else(|| value.get("event").and_then(|event| event.get("content_block")))?;
+    if block.get("type").and_then(|value| value.as_str()) != Some("text") {
+        return None;
+    }
+    let text = block.get("text").and_then(|value| value.as_str())?;
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
     }
 }
 
@@ -347,6 +414,11 @@ fn parse_text_from_message_content(message: &serde_json::Value) -> Option<String
     } else {
         Some(chunks.join(""))
     }
+}
+
+fn looks_like_json_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with('{') || trimmed.starts_with('[')
 }
 
 fn parse_system_message_from_jsonl_line(line: &str) -> Option<String> {

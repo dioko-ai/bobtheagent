@@ -581,9 +581,67 @@ fn parses_only_json_agent_message_lines() {
         parse_agent_message_from_jsonl_line(stream_result_line),
         Some("final".to_string())
     );
+    let content_block_delta_line =
+        r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"question 1?"}}"#;
+    assert_eq!(
+        parse_agent_message_from_jsonl_line(content_block_delta_line),
+        Some("question 1?".to_string())
+    );
+    let wrapped_content_block_delta_line = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"question 2?"}}}"#;
+    assert_eq!(
+        parse_agent_message_from_jsonl_line(wrapped_content_block_delta_line),
+        Some("question 2?".to_string())
+    );
+    let content_block_start_line =
+        r#"{"type":"content_block_start","content_block":{"type":"text","text":"Q: target platforms?"}}"#;
+    assert_eq!(
+        parse_agent_message_from_jsonl_line(content_block_start_line),
+        Some("Q: target platforms?".to_string())
+    );
+    let structured_result_line =
+        r#"{"type":"result","result":{"content":[{"type":"text","text":"Please answer all questions."}]}}"#;
+    assert_eq!(
+        parse_agent_message_from_jsonl_line(structured_result_line),
+        Some("Please answer all questions.".to_string())
+    );
     let non_agent = r#"{"type":"item.completed","item":{"type":"reasoning","text":"x"}}"#;
     assert_eq!(parse_agent_message_from_jsonl_line(non_agent), None);
     assert_eq!(parse_agent_message_from_jsonl_line("not-json"), None);
+}
+
+#[test]
+fn json_assistant_mode_keeps_plaintext_stdout_lines() {
+    let adapter = CodexAdapter::with_config(CodexCommandConfig {
+        program: "bash".to_string(),
+        args_prefix: vec!["-lc".to_string(), "printf 'question one?\\n'".to_string()],
+        output_mode: AdapterOutputMode::JsonAssistantOnly,
+        persistent_session: false,
+        skip_reader_join_after_wait: false,
+        model: None,
+        model_reasoning_effort: None,
+    });
+    adapter.send_prompt("ignored".to_string());
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut outputs = Vec::new();
+    while Instant::now() < deadline {
+        for event in adapter.drain_events() {
+            match event {
+                AgentEvent::Output(line) => outputs.push(line),
+                AgentEvent::Completed { .. } => {}
+                AgentEvent::System(_) => {}
+            }
+        }
+        if outputs.iter().any(|line| line.contains("question one?")) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(
+        outputs.iter().any(|line| line.contains("question one?")),
+        "expected plaintext stdout line to remain visible in JSON assistant mode"
+    );
 }
 
 #[test]
