@@ -2,7 +2,7 @@ use super::*;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::agent::AgentEvent;
+use crate::agent::{AdapterOutputMode, AgentEvent, BackendKind};
 use crate::session_store::{
     PlannerTaskFileEntry, PlannerTaskKindFile, PlannerTaskStatusFile, SessionStore,
 };
@@ -266,6 +266,31 @@ fn dispatch_agent_prompt_does_not_replace_in_flight_context_adapter_after_backen
     );
 
     let _ = std::fs::remove_dir_all(&session_dir);
+}
+
+#[test]
+fn build_worker_adapter_for_codex_keeps_plain_text_persistent_behavior() {
+    let routing = CodexAgentModelRouting::default();
+    let adapter = build_worker_adapter(&routing, WorkerRole::Implementor);
+    let config = adapter.config_snapshot();
+
+    assert_eq!(config.backend_kind(), BackendKind::Codex);
+    assert_eq!(config.output_mode, AdapterOutputMode::PlainText);
+    assert!(config.persistent_session);
+    assert!(config.skip_reader_join_after_wait);
+}
+
+#[test]
+fn build_worker_adapter_for_claude_uses_json_persistent_mode_for_resumption() {
+    let routing =
+        CodexAgentModelRouting::from_toml_str("[backend]\nselected = \"claude\"\n").unwrap_or_default();
+    let adapter = build_worker_adapter(&routing, WorkerRole::Implementor);
+    let config = adapter.config_snapshot();
+
+    assert_eq!(config.backend_kind(), BackendKind::Claude);
+    assert_eq!(config.output_mode, AdapterOutputMode::JsonAssistantOnly);
+    assert!(config.persistent_session);
+    assert!(config.skip_reader_join_after_wait);
 }
 
 #[test]

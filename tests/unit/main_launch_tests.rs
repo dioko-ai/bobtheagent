@@ -418,6 +418,7 @@ fn post_completion_tail_drain_collects_late_worker_output() {
         ],
         output_mode: AdapterOutputMode::PlainText,
         persistent_session: true,
+        skip_reader_join_after_wait: false,
         model: None,
         model_reasoning_effort: None,
     });

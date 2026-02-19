@@ -18,6 +18,7 @@ pub struct CodexCommandConfig {
     pub args_prefix: Vec<String>,
     pub output_mode: AdapterOutputMode,
     pub persistent_session: bool,
+    pub skip_reader_join_after_wait: bool,
     pub model: Option<String>,
     pub model_reasoning_effort: Option<String>,
 }
@@ -64,6 +65,7 @@ impl CodexCommandConfig {
                 ],
                 output_mode: AdapterOutputMode::PlainText,
                 persistent_session: false,
+                skip_reader_join_after_wait: false,
                 model: None,
                 model_reasoning_effort: None,
             },
@@ -72,6 +74,7 @@ impl CodexCommandConfig {
                 args_prefix: vec!["--dangerously-skip-permissions".to_string()],
                 output_mode: AdapterOutputMode::PlainText,
                 persistent_session: false,
+                skip_reader_join_after_wait: false,
                 model: None,
                 model_reasoning_effort: None,
             },
@@ -196,8 +199,9 @@ impl CodexAdapter {
             }
 
             let wait_result = child.wait();
-            let skip_reader_join_after_wait = config.persistent_session
-                && matches!(config.output_mode, AdapterOutputMode::PlainText);
+            let skip_reader_join_after_wait = (config.persistent_session
+                && matches!(config.output_mode, AdapterOutputMode::PlainText))
+                || (config.persistent_session && config.skip_reader_join_after_wait);
             if skip_reader_join_after_wait {
                 // Worker-style adapters can run shell commands that spawn background descendants.
                 // Those descendants may inherit stdout/stderr and keep pipes open, causing reader
@@ -216,6 +220,11 @@ impl CodexAdapter {
     #[cfg(test)]
     pub fn program(&self) -> &str {
         &self.config.program
+    }
+
+    #[cfg(test)]
+    pub fn config_snapshot(&self) -> CodexCommandConfig {
+        self.config.clone()
     }
 
     #[cfg(test)]

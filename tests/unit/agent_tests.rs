@@ -16,6 +16,7 @@ fn default_codex_config_is_unsandboxed_for_this_version() {
     );
     assert_eq!(config.output_mode, AdapterOutputMode::PlainText);
     assert!(!config.persistent_session);
+    assert!(!config.skip_reader_join_after_wait);
     assert!(config.model.is_none());
     assert!(config.model_reasoning_effort.is_none());
 }
@@ -30,6 +31,7 @@ fn default_claude_config_uses_claude_backend_defaults() {
     );
     assert_eq!(config.output_mode, AdapterOutputMode::PlainText);
     assert!(!config.persistent_session);
+    assert!(!config.skip_reader_join_after_wait);
     assert!(config.model.is_none());
     assert!(config.model_reasoning_effort.is_none());
 }
@@ -239,6 +241,7 @@ fn adapter_streams_stdout_and_stderr() {
         ],
         output_mode: AdapterOutputMode::PlainText,
         persistent_session: false,
+        skip_reader_join_after_wait: false,
         model: None,
         model_reasoning_effort: None,
     });
@@ -271,6 +274,7 @@ fn adapter_emits_completed_event() {
         args_prefix: vec!["-lc".to_string(), "printf 'done\\n'".to_string()],
         output_mode: AdapterOutputMode::PlainText,
         persistent_session: false,
+        skip_reader_join_after_wait: false,
         model: None,
         model_reasoning_effort: None,
     });
@@ -305,6 +309,7 @@ fn adapter_emits_completed_after_output_is_drained() {
         ],
         output_mode: AdapterOutputMode::PlainText,
         persistent_session: false,
+        skip_reader_join_after_wait: false,
         model: None,
         model_reasoning_effort: None,
     });
@@ -364,6 +369,7 @@ fn adapter_reports_spawn_errors() {
         args_prefix: Vec::new(),
         output_mode: AdapterOutputMode::PlainText,
         persistent_session: false,
+        skip_reader_join_after_wait: false,
         model: None,
         model_reasoning_effort: None,
     });
@@ -398,6 +404,7 @@ fn adapter_spawn_error_still_emits_completed_event() {
         args_prefix: Vec::new(),
         output_mode: AdapterOutputMode::PlainText,
         persistent_session: false,
+        skip_reader_join_after_wait: false,
         model: None,
         model_reasoning_effort: None,
     });
@@ -438,6 +445,7 @@ fn claude_backend_spawn_error_still_emits_completed_event() {
         args_prefix: Vec::new(),
         output_mode: AdapterOutputMode::PlainText,
         persistent_session: false,
+        skip_reader_join_after_wait: false,
         model: Some("claude-sonnet-4.5".to_string()),
         model_reasoning_effort: Some("high".to_string()),
     });
@@ -481,6 +489,46 @@ fn persistent_plain_text_completes_without_waiting_for_background_descendants() 
         ],
         output_mode: AdapterOutputMode::PlainText,
         persistent_session: true,
+        skip_reader_join_after_wait: false,
+        model: None,
+        model_reasoning_effort: None,
+    });
+    let started = Instant::now();
+    adapter.send_prompt("ignored".to_string());
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut completed_elapsed: Option<Duration> = None;
+    while Instant::now() < deadline {
+        for event in adapter.drain_events() {
+            if let AgentEvent::Completed { .. } = event {
+                completed_elapsed = Some(started.elapsed());
+                break;
+            }
+        }
+        if completed_elapsed.is_some() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let elapsed = completed_elapsed.expect("expected completed event");
+    assert!(
+        elapsed < Duration::from_millis(1200),
+        "completion was delayed by descendant-held pipes: elapsed={elapsed:?}"
+    );
+}
+
+#[test]
+fn persistent_json_can_complete_without_waiting_for_background_descendants() {
+    let adapter = CodexAdapter::with_config(CodexCommandConfig {
+        program: "bash".to_string(),
+        args_prefix: vec![
+            "-lc".to_string(),
+            "printf '{\"type\":\"result\",\"result\":\"ok\"}\\n'; (sleep 2) &".to_string(),
+        ],
+        output_mode: AdapterOutputMode::JsonAssistantOnly,
+        persistent_session: true,
+        skip_reader_join_after_wait: true,
         model: None,
         model_reasoning_effort: None,
     });

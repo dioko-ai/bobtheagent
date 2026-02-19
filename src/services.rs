@@ -366,8 +366,13 @@ fn worker_role_agent_kind(role: WorkerRole) -> CodexAgentKind {
 
 fn build_worker_adapter(model_routing: &CodexAgentModelRouting, role: WorkerRole) -> CodexAdapter {
     let mut config = model_routing.base_command_config();
-    config.output_mode = crate::agent::AdapterOutputMode::PlainText;
+    config.output_mode = if matches!(config.backend_kind(), BackendKind::Claude) {
+        crate::agent::AdapterOutputMode::JsonAssistantOnly
+    } else {
+        crate::agent::AdapterOutputMode::PlainText
+    };
     config.persistent_session = true;
+    config.skip_reader_join_after_wait = true;
     let profile = model_routing.profile_for(worker_role_agent_kind(role));
     if matches!(config.backend_kind(), BackendKind::Codex) {
         config.model = Some(profile.model.clone());
