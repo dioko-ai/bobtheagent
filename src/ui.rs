@@ -20,6 +20,8 @@ const STATUS_HEIGHT: u16 = 3;
 const TITLE_BAR_HEIGHT: u16 = 3;
 const ACTIVE_TITLE_BG: Color = Color::Rgb(90, 145, 200);
 const ACTIVE_TITLE_FG: Color = Color::Black;
+const LEFT_TOP_PANE_PERCENT: u16 = 30;
+const LEFT_BOTTOM_PANE_PERCENT: u16 = 70;
 const STATUS_HELP_TEXT: &str = "Tab/Shift+Tab focus | Ctrl+U/Ctrl+D or PgUp/PgDn scroll main right pane | Wheel scrolls focused pane";
 
 #[derive(Debug, Clone)]
@@ -39,7 +41,7 @@ pub fn chat_input_text_width(screen: Rect) -> u16 {
     let [left, _right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
     let [_left_top, left_bottom] =
-        Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(left);
+        Layout::vertical([Constraint::Percentage(LEFT_TOP_PANE_PERCENT), Constraint::Percentage(LEFT_BOTTOM_PANE_PERCENT)]).areas(left);
     let [_title_bar, content] =
         Layout::vertical([Constraint::Length(TITLE_BAR_HEIGHT), Constraint::Min(0)])
             .areas(left_bottom);
@@ -52,7 +54,7 @@ pub fn chat_max_scroll(screen: Rect, app: &App) -> u16 {
     let [left, _right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
     let [_left_top, left_bottom] =
-        Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(left);
+        Layout::vertical([Constraint::Percentage(LEFT_TOP_PANE_PERCENT), Constraint::Percentage(LEFT_BOTTOM_PANE_PERCENT)]).areas(left);
     let [_title_bar, content] =
         Layout::vertical([Constraint::Length(TITLE_BAR_HEIGHT), Constraint::Min(0)])
             .areas(left_bottom);
@@ -83,7 +85,7 @@ pub fn left_top_max_scroll(screen: Rect, app: &App) -> u16 {
     let [left, _right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
     let [left_top, _left_bottom] =
-        Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(left);
+        Layout::vertical([Constraint::Percentage(LEFT_TOP_PANE_PERCENT), Constraint::Percentage(LEFT_BOTTOM_PANE_PERCENT)]).areas(left);
     let [_title_bar, content] =
         Layout::vertical([Constraint::Length(TITLE_BAR_HEIGHT), Constraint::Min(0)])
             .areas(left_top);
@@ -122,7 +124,7 @@ pub fn pane_hit_test(screen: Rect, x: u16, y: u16) -> Option<Pane> {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
     let [left_top, left_bottom] =
-        Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(left);
+        Layout::vertical([Constraint::Percentage(LEFT_TOP_PANE_PERCENT), Constraint::Percentage(LEFT_BOTTOM_PANE_PERCENT)]).areas(left);
 
     if point_in_rect(left_top, x, y) {
         return Some(Pane::LeftTop);
@@ -142,7 +144,7 @@ pub fn render(frame: &mut Frame, app: &App, theme: &Theme) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
     let [left_top, left_bottom] =
-        Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(left);
+        Layout::vertical([Constraint::Percentage(LEFT_TOP_PANE_PERCENT), Constraint::Percentage(LEFT_BOTTOM_PANE_PERCENT)]).areas(left);
 
     render_worker_output_pane(
         frame,
