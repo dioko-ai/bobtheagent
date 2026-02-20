@@ -1,15 +1,16 @@
-# AgentBob
+<h1 align="center">Bob The Agent</h1>
 
-<img width="300" alt="agentbob" src="https://github.com/user-attachments/assets/1d2563a3-316d-40ae-92a6-d9bd232fb517" />
-
+<p align="center">
+<img width="300" alt="agentbob" style="text-align: center" src="https://github.com/user-attachments/assets/1d2563a3-316d-40ae-92a6-d9bd232fb517" />
+</p>
 
 **A lightning-fast AI orchestrator that decomposes complex coding tasks into agent-driven workflows — built in Rust.**
 
 ## What is AgentBob?
 
-AgentBob is a TUI and CLI tool that acts as a master planner for software engineering tasks. You describe what you want built, and AgentBob decomposes your request into a structured task graph, then dispatches a team of specialized AI agents to execute each step — with built-in quality gates and retry loops to ensure correctness.
+Bob is a TUI and CLI tool that acts as a master planner for software engineering tasks. You describe what you want built, and Bob decomposes your request into a structured task graph, then dispatches a team of specialized AI agents to execute each step — with built-in quality gates and retry loops to ensure correctness.
 
-The multi-agent workflow follows a rigorous pipeline: **Implementor** writes the code, an **Auditor** reviews the implementation, a **Test Writer** generates tests, a **Test Runner** executes them, and a **Final Audit** verifies the end result. When an audit or test fails, AgentBob automatically retries the failing stage with feedback from the previous attempt, creating a self-correcting development loop.
+The multi-agent workflow follows a rigorous pipeline: **Implementor** writes the code, an **Auditor** reviews the implementation, a **Test Writer** generates tests, a **Test Runner** executes them, and a **Final Audit** verifies the end result. When an audit or test fails, Bob automatically retries the failing stage with feedback from the previous attempt, creating a self-correcting development loop.
 
 The interactive TUI provides a three-pane layout: sub-agent output streams in the top-left, a chat and input area occupies the bottom-left, and a task list with planner visualization sits on the right. AgentBob supports dual backends — **OpenAI Codex CLI** and **Anthropic Claude CLI** — and is written entirely in Rust (~13k lines), delivering a native binary with zero runtime overhead and instant startup.
 
@@ -74,8 +75,8 @@ AgentBob includes a **collaborative planner mode** where you can interactively r
 ### Clone & Build
 
 ```bash
-git clone https://github.com/anthropics/metaagent.git
-cd metaagent
+git clone https://github.com/dioko-ai/bobtheagent.git
+cd bobtheagent
 cargo build --release
 ```
 
@@ -129,7 +130,7 @@ worker_final_audit = "large-smart"
 
 ## Installation
 
-Pre-built binaries are available on the [GitHub Releases](https://github.com/anthropics/metaagent/releases) page (details TBD). Alternatively, build from source — see [Compiling](#compiling) below.
+Pre-built binaries are available on the [GitHub Releases](https://github.com/diok-ai/bobtheagent/releases) page (details TBD). Alternatively, build from source — see [Compiling](#compiling) below.
 
 ## Compiling
 
@@ -173,7 +174,7 @@ cargo build --release --locked
 
 ## Configuration
 
-AgentBob merges an embedded default configuration (`src/default_config.toml`) with the user config at `~/.agentbob/config.toml` (with legacy fallbacks to `~/.bob/config.toml` and `~/.metaagent/config.toml`). Missing keys are filled from defaults, so you only need to override what you want to change. The merged config is written back on every launch.
+Bob merges an embedded default configuration (`src/default_config.toml`) with the user config at `~/.agentbob/config.toml` (with legacy fallbacks to `~/.bob/config.toml` and `~/.metaagent/config.toml`). Missing keys are filled from defaults, so you only need to override what you want to change. The merged config is written back on every launch.
 
 ### Backend selection
 
@@ -250,7 +251,7 @@ TUI colors are customizable via a `theme.toml` file. See `src/theme.rs` for the 
 
 ## Commands Reference
 
-AgentBob's TUI provides 16 slash commands, organized by category:
+Bob's TUI provides 16 slash commands, organized by category:
 
 ### Planning
 
@@ -290,7 +291,7 @@ AgentBob's TUI provides 16 slash commands, organized by category:
 
 ## CLI API
 
-AgentBob exposes a JSON API via the CLI for scripting and automation.
+Bob exposes a JSON API via the CLI for scripting and automation.
 
 ### Output mode
 
