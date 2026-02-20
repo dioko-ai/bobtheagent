@@ -592,14 +592,12 @@ fn parses_only_json_agent_message_lines() {
         parse_agent_message_from_jsonl_line(wrapped_content_block_delta_line),
         Some("question 2?".to_string())
     );
-    let content_block_start_line =
-        r#"{"type":"content_block_start","content_block":{"type":"text","text":"Q: target platforms?"}}"#;
+    let content_block_start_line = r#"{"type":"content_block_start","content_block":{"type":"text","text":"Q: target platforms?"}}"#;
     assert_eq!(
         parse_agent_message_from_jsonl_line(content_block_start_line),
         Some("Q: target platforms?".to_string())
     );
-    let structured_result_line =
-        r#"{"type":"result","result":{"content":[{"type":"text","text":"Please answer all questions."}]}}"#;
+    let structured_result_line = r#"{"type":"result","result":{"content":[{"type":"text","text":"Please answer all questions."}]}}"#;
     assert_eq!(
         parse_agent_message_from_jsonl_line(structured_result_line),
         Some("Please answer all questions.".to_string())
@@ -646,8 +644,7 @@ fn json_assistant_mode_keeps_plaintext_stdout_lines() {
 
 #[test]
 fn parses_json_error_lines_into_system_messages() {
-    let error_line =
-        r#"{"type":"result","subtype":"error","is_error":true,"error":{"message":"resume failed"}}"#;
+    let error_line = r#"{"type":"result","subtype":"error","is_error":true,"error":{"message":"resume failed"}}"#;
     assert_eq!(
         parse_system_message_from_jsonl_line(error_line),
         Some("resume failed".to_string())

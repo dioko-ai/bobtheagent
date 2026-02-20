@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use crossterm::event::{
@@ -6,6 +7,17 @@ use crossterm::event::{
 };
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+#[derive(Debug, Default)]
+struct LeftMouseState {
+    press_position: Option<(u16, u16)>,
+    dragged_since_press: bool,
+}
+
+fn left_mouse_state() -> &'static Mutex<LeftMouseState> {
+    static LEFT_MOUSE_STATE: OnceLock<Mutex<LeftMouseState>> = OnceLock::new();
+    LEFT_MOUSE_STATE.get_or_init(|| Mutex::new(LeftMouseState::default()))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppEvent {
@@ -23,6 +35,7 @@ pub enum AppEvent {
     ScrollRightDownGlobal,
     InputChar(char),
     Backspace,
+    InsertNewline,
     Submit,
     MouseScrollUp,
     MouseScrollDown,
@@ -66,6 +79,9 @@ fn map_key_event(key_event: KeyEvent) -> AppEvent {
         KeyCode::Left => AppEvent::CursorLeft,
         KeyCode::Right => AppEvent::CursorRight,
         KeyCode::Backspace => AppEvent::Backspace,
+        KeyCode::Enter if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+            AppEvent::InsertNewline
+        }
         KeyCode::Enter => AppEvent::Submit,
         KeyCode::Char(c) => AppEvent::InputChar(c),
         _ => AppEvent::Tick,
@@ -81,6 +97,42 @@ fn map_mouse_event_kind(kind: MouseEventKind) -> AppEvent {
     }
 }
 
+fn map_mouse_event(mouse_event: crossterm::event::MouseEvent) -> AppEvent {
+    match mouse_event.kind {
+        MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+            let mut state = left_mouse_state().lock().unwrap_or_else(|e| e.into_inner());
+            state.press_position = Some((mouse_event.column, mouse_event.row));
+            state.dragged_since_press = false;
+            AppEvent::Tick
+        }
+        MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
+            let mut state = left_mouse_state().lock().unwrap_or_else(|e| e.into_inner());
+            if state.press_position.is_some() {
+                state.dragged_since_press = true;
+            }
+            AppEvent::Tick
+        }
+        MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
+            let mut state = left_mouse_state().lock().unwrap_or_else(|e| e.into_inner());
+            let should_emit_click = state.press_position.take().is_some() && !state.dragged_since_press;
+            state.dragged_since_press = false;
+            if should_emit_click {
+                AppEvent::MouseLeftClick(mouse_event.column, mouse_event.row)
+            } else {
+                AppEvent::Tick
+            }
+        }
+        _ => map_mouse_event_kind(mouse_event.kind),
+    }
+}
+
+#[cfg(test)]
+fn reset_left_mouse_state_for_tests() {
+    let mut state = left_mouse_state().lock().unwrap_or_else(|e| e.into_inner());
+    state.press_position = None;
+    state.dragged_since_press = false;
+}
+
 pub fn next_event() -> io::Result<AppEvent> {
     if event::poll(EVENT_POLL_INTERVAL)? {
         match event::read()? {
@@ -88,14 +140,7 @@ pub fn next_event() -> io::Result<AppEvent> {
                 return Ok(map_key_event(key_event));
             }
             Event::Mouse(mouse_event) => {
-                if let MouseEventKind::Down(crossterm::event::MouseButton::Left) = mouse_event.kind
-                {
-                    return Ok(AppEvent::MouseLeftClick(
-                        mouse_event.column,
-                        mouse_event.row,
-                    ));
-                }
-                return Ok(map_mouse_event_kind(mouse_event.kind));
+                return Ok(map_mouse_event(mouse_event));
             }
             _ => {}
         }

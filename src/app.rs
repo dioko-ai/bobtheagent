@@ -219,6 +219,10 @@ impl App {
         self.invalidate_chat_input_cache();
     }
 
+    pub fn insert_chat_newline(&mut self) {
+        self.input_char('\n');
+    }
+
     pub fn move_cursor_left(&mut self) {
         self.chat_cursor = self.chat_cursor.saturating_sub(1);
         self.chat_cursor_goal_col = None;

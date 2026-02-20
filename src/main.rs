@@ -209,27 +209,38 @@ fn run_app(
         Ok(config) => config,
         Err(err) => {
             app.push_agent_message(format!(
-                "System: Failed to load model profile config from ~/.metaagent/config.toml: {err}. Using defaults."
+                "System: Failed to load model profile config from ~/.bob/config.toml (with legacy fallback): {err}. Using defaults."
             ));
             CodexAgentModelRouting::default()
         }
     };
     let mut selected_backend = model_routing.base_command_config().backend_kind();
-    let mut master_adapter = build_json_persistent_adapter(
+    let mut master_adapter =
+        build_json_persistent_adapter(&model_routing, selected_backend, CodexAgentKind::Master);
+    let mut master_report_adapter = build_json_persistent_adapter(
         &model_routing,
         selected_backend,
-        CodexAgentKind::Master,
+        CodexAgentKind::MasterReport,
     );
-    let mut master_report_adapter =
-        build_json_persistent_adapter(&model_routing, selected_backend, CodexAgentKind::MasterReport);
-    let mut project_info_adapter =
-        build_json_persistent_adapter(&model_routing, selected_backend, CodexAgentKind::ProjectInfo);
+    let mut project_info_adapter = build_json_persistent_adapter(
+        &model_routing,
+        selected_backend,
+        CodexAgentKind::ProjectInfo,
+    );
     let mut worker_agent_adapters: HashMap<String, CodexAdapter> = HashMap::new();
     let mut active_worker_context_key: Option<String> = None;
-    let mut docs_attach_adapter =
-        build_plain_adapter(&model_routing, selected_backend, CodexAgentKind::DocsAttach, false);
-    let mut task_check_adapter =
-        build_plain_adapter(&model_routing, selected_backend, CodexAgentKind::TaskCheck, false);
+    let mut docs_attach_adapter = build_plain_adapter(
+        &model_routing,
+        selected_backend,
+        CodexAgentKind::DocsAttach,
+        false,
+    );
+    let mut task_check_adapter = build_plain_adapter(
+        &model_routing,
+        selected_backend,
+        CodexAgentKind::TaskCheck,
+        false,
+    );
     let test_runner_adapter = TestRunnerAdapter::new();
     let mut master_transcript: Vec<String> = Vec::new();
     let mut master_report_transcript: Vec<String> = Vec::new();
@@ -879,7 +890,12 @@ fn run_app(
             needs_draw = true;
         }
 
-        let app_event = events::next_event()?;
+        let mut app_event = events::next_event()?;
+        if matches!(app_event, AppEvent::InsertNewline)
+            && (app.active_pane != Pane::LeftBottom || is_picker_open(&app))
+        {
+            app_event = AppEvent::Submit;
+        }
         if !matches!(app_event, AppEvent::Tick) {
             needs_draw = true;
         }
@@ -1117,9 +1133,7 @@ fn run_app(
                     app.push_agent_message("System: Backend picker cancelled.".to_string());
                 } else if app.active_pane == Pane::LeftBottom {
                     app.backspace_input();
-                } else if app.active_pane == Pane::Right
-                    && app.is_planner_mode()
-                {
+                } else if app.active_pane == Pane::Right && app.is_planner_mode() {
                     let size = terminal.size()?;
                     let screen = Rect::new(0, 0, size.width, size.height);
                     let (width, visible_lines) = ui::planner_editor_metrics(screen);
@@ -1128,6 +1142,9 @@ fn run_app(
                     app.ensure_planner_cursor_visible(width, visible_lines, max_scroll);
                     persist_planner_markdown_if_possible(&mut app, session_store.as_ref());
                 }
+            }
+            AppEvent::InsertNewline => {
+                app.insert_chat_newline();
             }
             AppEvent::Submit => {
                 if app.is_resume_picker_open() {
@@ -1321,23 +1338,9 @@ fn run_app(
                 }
             }
             AppEvent::MouseLeftClick(column, row) => {
-                if !is_picker_open(&app) {
-                    let size = terminal.size()?;
-                    let screen = Rect::new(0, 0, size.width, size.height);
-                    if let Some(pane) = ui::pane_hit_test(screen, column, row) {
-                        app.active_pane = pane;
-                    }
-                    if app.is_planner_mode() {
-                        if let Some(cursor) = ui::planner_cursor_hit_test(screen, &app, column, row)
-                        {
-                            app.set_planner_cursor(cursor);
-                        }
-                    } else if let Some(task_key) =
-                        ui::right_pane_toggle_hit_test(screen, &app, column, row)
-                    {
-                        app.toggle_task_details(&task_key);
-                    }
-                }
+                let size = terminal.size()?;
+                let screen = Rect::new(0, 0, size.width, size.height);
+                handle_mouse_left_click(&mut app, screen, column, row);
             }
         }
 
@@ -2250,6 +2253,24 @@ fn is_picker_open(app: &App) -> bool {
     app.is_resume_picker_open() || app.is_backend_picker_open()
 }
 
+fn handle_mouse_left_click(app: &mut App, screen: Rect, column: u16, row: u16) {
+    if is_picker_open(app) {
+        return;
+    }
+
+    if let Some(pane) = ui::pane_hit_test(screen, column, row) {
+        app.active_pane = pane;
+    }
+
+    if app.is_planner_mode() {
+        if let Some(cursor) = ui::planner_cursor_hit_test(screen, app, column, row) {
+            app.set_planner_cursor(cursor);
+        }
+    } else if let Some(task_key) = ui::right_pane_toggle_hit_test(screen, app, column, row) {
+        app.toggle_task_details(&task_key);
+    }
+}
+
 fn backend_label(kind: BackendKind) -> &'static str {
     match kind {
         BackendKind::Codex => "codex",
@@ -2327,17 +2348,15 @@ fn rebuild_runtime_adapters(
     active_worker_context_key: &mut Option<String>,
     worker_agent_adapters: &mut HashMap<String, CodexAdapter>,
 ) {
-    *master_adapter = build_json_persistent_adapter(model_routing, selected_backend, CodexAgentKind::Master);
+    *master_adapter =
+        build_json_persistent_adapter(model_routing, selected_backend, CodexAgentKind::Master);
     *master_report_adapter = build_json_persistent_adapter(
         model_routing,
         selected_backend,
         CodexAgentKind::MasterReport,
     );
-    *project_info_adapter = build_json_persistent_adapter(
-        model_routing,
-        selected_backend,
-        CodexAgentKind::ProjectInfo,
-    );
+    *project_info_adapter =
+        build_json_persistent_adapter(model_routing, selected_backend, CodexAgentKind::ProjectInfo);
     *docs_attach_adapter = build_plain_adapter(
         model_routing,
         selected_backend,
@@ -2414,7 +2433,7 @@ fn apply_backend_selection(
             config_file.display()
         )),
         Err(err) => app.push_agent_message(format!(
-            "System: Backend set to {} for this run, but persistence to ~/.metaagent/config.toml failed: {err}. New adapters in this run will still use this backend.",
+            "System: Backend set to {} for this run, but persistence to config.toml failed (default path is ~/.bob/config.toml with legacy fallback to ~/.metaagent/config.toml): {err}. New adapters in this run will still use this backend.",
             selected.label
         )),
     }
@@ -2743,7 +2762,7 @@ impl Default for CliOutputMode {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "metaagent-rust")]
+#[command(name = "bob")]
 struct LaunchCli {
     #[arg(long = "send-file", value_name = "PATH")]
     send_file: Option<PathBuf>,
@@ -4284,7 +4303,7 @@ fn parse_launch_options<I>(args: I) -> io::Result<LaunchOptions>
 where
     I: IntoIterator<Item = String>,
 {
-    let mut argv = vec!["metaagent-rust".to_string()];
+    let mut argv = vec!["bob".to_string()];
     argv.extend(args);
     let parsed = LaunchCli::try_parse_from(argv).map_err(|err| {
         if matches!(

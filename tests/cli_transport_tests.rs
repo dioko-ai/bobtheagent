@@ -5,14 +5,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn run_cli(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_metaagent-rust"))
+    Command::new(env!("CARGO_BIN_EXE_bob"))
         .args(args)
         .output()
         .expect("run cli")
 }
 
 fn run_cli_in_home(home: &std::path::Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_metaagent-rust"))
+    Command::new(env!("CARGO_BIN_EXE_bob"))
         .env("HOME", home)
         .args(args)
         .output()
@@ -25,6 +25,10 @@ fn stdout_text(output: &Output) -> String {
 
 fn stderr_text(output: &Output) -> String {
     String::from_utf8(output.stderr.clone()).expect("stderr utf8")
+}
+
+fn cli_binary_path() -> &'static std::path::Path {
+    std::path::Path::new(env!("CARGO_BIN_EXE_bob"))
 }
 
 fn stdout_json(output: &Output) -> Value {
@@ -56,6 +60,35 @@ impl Drop for TempDirGuard {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
     }
+}
+
+#[test]
+fn transport_test_binary_resolution_targets_bob_executable() {
+    let binary = cli_binary_path();
+    let binary_name = binary
+        .file_name()
+        .and_then(|value| value.to_str())
+        .expect("binary path should have UTF-8 filename")
+        .to_ascii_lowercase();
+    assert!(
+        binary_name == "bob" || binary_name == "bob.exe",
+        "expected integration-test binary to resolve to bob, got: {binary_name}"
+    );
+    assert!(
+        binary.exists(),
+        "resolved integration-test binary path should exist: {}",
+        binary.display()
+    );
+}
+
+#[test]
+fn help_output_uses_bob_command_identity() {
+    let output = run_cli(&["--help"]);
+    assert_eq!(output.status.code(), Some(0));
+
+    let stdout = stdout_text(&output);
+    assert!(stdout.contains("Usage: bob "));
+    assert!(stdout.contains("bob [OPTIONS]"));
 }
 
 #[test]
@@ -229,7 +262,7 @@ fn invalid_task_graph_maps_to_validation_failed_exit_code_and_error_code() {
     .expect("write invalid tasks file");
 
     let tasks_file_arg = tasks_file.to_string_lossy().to_string();
-    let output = Command::new(env!("CARGO_BIN_EXE_metaagent-rust"))
+    let output = Command::new(env!("CARGO_BIN_EXE_bob"))
         .args([
             "--output",
             "json",
@@ -262,7 +295,7 @@ fn malformed_tasks_json_returns_invalid_request_parse_contract() {
         .expect("write malformed tasks file");
 
     let tasks_file_arg = tasks_file.to_string_lossy().to_string();
-    let output = Command::new(env!("CARGO_BIN_EXE_metaagent-rust"))
+    let output = Command::new(env!("CARGO_BIN_EXE_bob"))
         .args([
             "--output",
             "json",

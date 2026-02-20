@@ -187,8 +187,8 @@ fn dispatch_agent_prompt_keeps_existing_context_and_creates_new_context_for_futu
     );
     assert_eq!(active_key.as_deref(), Some("implementor:1"));
 
-    routing =
-        CodexAgentModelRouting::from_toml_str("[backend]\nselected = \"claude\"\n").unwrap_or_default();
+    routing = CodexAgentModelRouting::from_toml_str("[backend]\nselected = \"claude\"\n")
+        .unwrap_or_default();
     let second_job = StartedJob {
         run: JobRun::AgentPrompt("second".to_string()),
         role: WorkerRole::Implementor,
@@ -236,8 +236,8 @@ fn dispatch_agent_prompt_does_not_replace_in_flight_context_adapter_after_backen
 
     let mut active_key = None;
     let test_runner = TestRunnerAdapter::new();
-    let routing =
-        CodexAgentModelRouting::from_toml_str("[backend]\nselected = \"claude\"\n").unwrap_or_default();
+    let routing = CodexAgentModelRouting::from_toml_str("[backend]\nselected = \"claude\"\n")
+        .unwrap_or_default();
 
     let job = StartedJob {
         run: JobRun::AgentPrompt("continue same context".to_string()),
@@ -282,8 +282,8 @@ fn build_worker_adapter_for_codex_keeps_plain_text_persistent_behavior() {
 
 #[test]
 fn build_worker_adapter_for_claude_uses_json_persistent_mode_for_resumption() {
-    let routing =
-        CodexAgentModelRouting::from_toml_str("[backend]\nselected = \"claude\"\n").unwrap_or_default();
+    let routing = CodexAgentModelRouting::from_toml_str("[backend]\nselected = \"claude\"\n")
+        .unwrap_or_default();
     let adapter = build_worker_adapter(&routing, WorkerRole::Implementor);
     let config = adapter.config_snapshot();
 

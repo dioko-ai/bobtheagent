@@ -35,11 +35,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp target/release/metaagent-rust dist/metaagent-rust-${{ matrix.os }}
+          cp target/release/bob dist/bob-${{ matrix.os }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: metaagent-rust-${{ matrix.os }}
-          path: dist/metaagent-rust-${{ matrix.os }}
+          name: bob-${{ matrix.os }}
+          path: dist/bob-${{ matrix.os }}
           if-no-files-found: error

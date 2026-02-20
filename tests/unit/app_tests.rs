@@ -212,6 +212,32 @@ fn chat_input_and_submit_flow() {
 }
 
 #[test]
+fn ctrl_enter_newline_then_enter_submits_and_clears_chat_input() {
+    let mut app = App::default();
+    app.input_char('h');
+    app.input_char('i');
+    app.insert_chat_newline();
+    app.input_char('t');
+    app.input_char('h');
+    app.input_char('e');
+    app.input_char('r');
+    app.input_char('e');
+
+    assert_eq!(app.chat_input(), "hi\nthere");
+    assert_eq!(app.left_bottom_lines().len(), 0);
+
+    let submitted = app.submit_chat_message();
+    assert_eq!(submitted, Some("hi\nthere".to_string()));
+    assert!(app.chat_input().is_empty());
+    assert_eq!(app.chat_cursor_line_col(200), (0, 0));
+    assert_eq!(app.left_bottom_lines().len(), 1);
+    assert_eq!(
+        app.left_bottom_lines().last().expect("chat line expected"),
+        "You: hi\nthere"
+    );
+}
+
+#[test]
 fn chat_input_layout_cache_reuses_and_invalidates() {
     let mut app = App::default();
     for ch in "hello world".chars() {

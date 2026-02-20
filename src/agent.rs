@@ -289,9 +289,7 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
                         let _ = tx.send(AgentEvent::Output(text));
                     } else if let Some(system_line) = parse_system_message_from_jsonl_line(&line) {
                         let _ = tx.send(AgentEvent::System(system_line));
-                    } else if !is_stderr
-                        && !looks_like_json_line(&line)
-                        && !line.trim().is_empty()
+                    } else if !is_stderr && !looks_like_json_line(&line) && !line.trim().is_empty()
                     {
                         // Some adapters occasionally emit plaintext lines even in JSON mode.
                         // Surface these lines instead of dropping potentially user-facing content.
@@ -307,7 +305,10 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
 
 fn parse_agent_message_from_jsonl_line(line: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
-    let kind = value.get("type").and_then(|value| value.as_str()).unwrap_or("");
+    let kind = value
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
     match kind {
         "item.completed" => {
             let item = value.get("item")?;
@@ -358,7 +359,9 @@ fn parse_agent_message_from_jsonl_line(line: &str) -> Option<String> {
             if let Some(text) = parse_text_content_block_from_value(&value) {
                 return Some(text);
             }
-            value.get("message").and_then(parse_text_from_message_content)
+            value
+                .get("message")
+                .and_then(parse_text_from_message_content)
         }
     }
 }
@@ -381,9 +384,11 @@ fn parse_text_delta_from_value(value: &serde_json::Value) -> Option<String> {
 }
 
 fn parse_text_content_block_from_value(value: &serde_json::Value) -> Option<String> {
-    let block = value
-        .get("content_block")
-        .or_else(|| value.get("event").and_then(|event| event.get("content_block")))?;
+    let block = value.get("content_block").or_else(|| {
+        value
+            .get("event")
+            .and_then(|event| event.get("content_block"))
+    })?;
     if block.get("type").and_then(|value| value.as_str()) != Some("text") {
         return None;
     }
@@ -402,7 +407,10 @@ fn parse_text_from_message_content(message: &serde_json::Value) -> Option<String
         .as_array()?;
     let mut chunks = Vec::new();
     for block in content {
-        let block_type = block.get("type").and_then(|value| value.as_str()).unwrap_or("");
+        let block_type = block
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
         if block_type == "text" {
             if let Some(text) = block.get("text").and_then(|value| value.as_str()) {
                 chunks.push(text.to_string());
@@ -424,7 +432,10 @@ fn looks_like_json_line(line: &str) -> bool {
 fn parse_system_message_from_jsonl_line(line: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
     let message = extract_error_message(&value)?;
-    let kind = value.get("type").and_then(|value| value.as_str()).unwrap_or("");
+    let kind = value
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
     if kind == "error" {
         return Some(message);
     }

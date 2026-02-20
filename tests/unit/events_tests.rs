@@ -1,4 +1,14 @@
 use super::*;
+use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+
+fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+    MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }
+}
 
 #[test]
 fn maps_navigation_and_quit_keys() {
@@ -102,6 +112,10 @@ fn maps_text_editing_keys() {
         map_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         AppEvent::Submit
     );
+    assert_eq!(
+        map_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)),
+        AppEvent::InsertNewline
+    );
 }
 
 #[test]
@@ -129,5 +143,57 @@ fn maps_left_click_mouse_down() {
     assert_eq!(
         map_mouse_event_kind(MouseEventKind::Down(crossterm::event::MouseButton::Left)),
         AppEvent::MouseLeftClick(0, 0)
+    );
+}
+
+#[test]
+fn left_click_emits_only_on_release_without_drag() {
+    reset_left_mouse_state_for_tests();
+
+    assert_eq!(
+        map_mouse_event(mouse_event(
+            MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            8,
+            4
+        )),
+        AppEvent::Tick
+    );
+    assert_eq!(
+        map_mouse_event(mouse_event(
+            MouseEventKind::Up(crossterm::event::MouseButton::Left),
+            10,
+            6
+        )),
+        AppEvent::MouseLeftClick(10, 6)
+    );
+}
+
+#[test]
+fn left_drag_sequence_does_not_emit_click() {
+    reset_left_mouse_state_for_tests();
+
+    assert_eq!(
+        map_mouse_event(mouse_event(
+            MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            8,
+            4
+        )),
+        AppEvent::Tick
+    );
+    assert_eq!(
+        map_mouse_event(mouse_event(
+            MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+            20,
+            10
+        )),
+        AppEvent::Tick
+    );
+    assert_eq!(
+        map_mouse_event(mouse_event(
+            MouseEventKind::Up(crossterm::event::MouseButton::Left),
+            20,
+            10
+        )),
+        AppEvent::Tick
     );
 }

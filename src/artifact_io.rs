@@ -10,6 +10,10 @@ use std::{fs::Permissions, os::unix::fs::PermissionsExt};
 
 use crate::default_config::DEFAULT_CONFIG_TOML;
 
+const APP_DIR_NAME: &str = ".bob";
+const LEGACY_APP_DIR_NAME: &str = ".metaagent";
+const CONFIG_FILE_NAME: &str = "config.toml";
+
 pub fn read_text_file(path: &Path) -> io::Result<String> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
@@ -44,10 +48,43 @@ pub fn home_dir() -> io::Result<PathBuf> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))
 }
 
+pub fn runtime_storage_dir() -> io::Result<PathBuf> {
+    let home = home_dir()?;
+    Ok(resolve_runtime_storage_dir(&home))
+}
+
+fn resolve_runtime_storage_dir(home: &Path) -> PathBuf {
+    let current = home.join(APP_DIR_NAME);
+    let legacy = home.join(LEGACY_APP_DIR_NAME);
+    let current_config = current.join(CONFIG_FILE_NAME);
+    if current_config.exists() {
+        return current;
+    }
+    let legacy_config = legacy.join(CONFIG_FILE_NAME);
+    if legacy_config.exists() {
+        return legacy;
+    }
+    if current.exists() {
+        return current;
+    }
+    if legacy.exists() {
+        return legacy;
+    }
+    current
+}
+
+fn default_storage_root_for_config_dir(config_dir: &Path) -> &'static str {
+    if config_dir.ends_with(LEGACY_APP_DIR_NAME) {
+        "~/.metaagent/sessions"
+    } else {
+        "~/.bob/sessions"
+    }
+}
+
 pub fn metaagent_config_file_path() -> io::Result<PathBuf> {
-    let config_dir = home_dir()?.join(".metaagent");
+    let config_dir = runtime_storage_dir()?;
     fs::create_dir_all(&config_dir)?;
-    Ok(config_dir.join("config.toml"))
+    Ok(config_dir.join(CONFIG_FILE_NAME))
 }
 
 pub fn ensure_default_metaagent_config() -> io::Result<PathBuf> {
@@ -61,6 +98,7 @@ pub fn ensure_default_metaagent_config() -> io::Result<PathBuf> {
     if existing_text.as_deref() != Some(merged_text.as_str()) {
         write_text_file_atomic(&config_file, &merged_text)?;
     }
+    write_legacy_compat_config_if_missing(&config_file, &merged_text);
     Ok(config_file)
 }
 
@@ -77,6 +115,11 @@ pub(crate) fn home_env_test_lock() -> &'static Mutex<()> {
 
 fn merge_default_config_with_user_overrides(override_text: Option<&str>) -> io::Result<String> {
     let mut merged = parse_toml_table(DEFAULT_CONFIG_TOML)?;
+    let config_dir = runtime_storage_dir()?;
+    apply_default_storage_root_dir(
+        &mut merged,
+        default_storage_root_for_config_dir(&config_dir),
+    );
     let override_value = parse_toml_table(override_text.unwrap_or_default())?;
     merge_toml_tables(&mut merged, override_value);
     toml::to_string_pretty(&merged).map_err(io::Error::other)
@@ -104,6 +147,39 @@ fn merge_toml_tables(base: &mut toml::Value, override_value: toml::Value) {
             *base_slot = override_item;
         }
     }
+}
+
+fn apply_default_storage_root_dir(base: &mut toml::Value, default_storage_root: &str) {
+    let Some(table) = base.as_table_mut() else {
+        return;
+    };
+    let storage = table
+        .entry("storage")
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    let Some(storage_table) = storage.as_table_mut() else {
+        return;
+    };
+    storage_table.insert(
+        "root_dir".to_string(),
+        toml::Value::String(default_storage_root.to_string()),
+    );
+}
+
+fn write_legacy_compat_config_if_missing(active_config_file: &Path, merged_text: &str) {
+    if !active_config_file
+        .parent()
+        .is_some_and(|parent| parent.ends_with(APP_DIR_NAME))
+    {
+        return;
+    }
+    let Ok(home) = home_dir() else {
+        return;
+    };
+    let legacy_file = home.join(LEGACY_APP_DIR_NAME).join(CONFIG_FILE_NAME);
+    if legacy_file.exists() {
+        return;
+    }
+    let _ = write_text_file_atomic(&legacy_file, merged_text);
 }
 
 fn write_text_file_atomic(path: &Path, text: &str) -> io::Result<()> {
@@ -168,3 +244,7 @@ fn sync_directory(path: &Path) -> io::Result<()> {
 fn sync_directory(_path: &Path) -> io::Result<()> {
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/artifact_io_tests.rs"]
+mod tests;

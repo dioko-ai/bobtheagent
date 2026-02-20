@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BIN_PATH="${1:-target/debug/metaagent-rust}"
+BIN_PATH="${1:-target/debug/bob}"
 
 if [[ ! -x "$BIN_PATH" ]]; then
   echo "Building binary at $BIN_PATH" >&2

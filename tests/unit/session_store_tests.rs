@@ -11,7 +11,7 @@ fn expands_home_paths() {
 fn embedded_default_config_includes_storage_section() {
     let parsed: MetaAgentConfig = toml::from_str(crate::default_config::DEFAULT_CONFIG_TOML)
         .expect("embedded default config should parse");
-    assert_eq!(parsed.storage.root_dir, "~/.metaagent/sessions");
+    assert_eq!(parsed.storage.root_dir, "~/.bob/sessions");
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn metaagent_config_storage_falls_back_when_storage_section_missing() {
         "#,
     )
     .expect("partial config should parse");
-    assert_eq!(parsed.storage.root_dir, "~/.metaagent/sessions");
+    assert_eq!(parsed.storage.root_dir, "~/.bob/sessions");
 }
 
 #[test]

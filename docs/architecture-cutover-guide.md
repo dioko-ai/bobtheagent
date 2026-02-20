@@ -31,10 +31,10 @@ Primary architecture reference:
 
 Use the API command tree for scriptable behavior:
 
-- `metaagent-rust api capability list|get`
-- `metaagent-rust api app ...`
-- `metaagent-rust api workflow ...`
-- `metaagent-rust api session ...`
+- `bob api capability list|get`
+- `bob api app ...`
+- `bob api workflow ...`
+- `bob api session ...`
 
 Automation expectations:
 
@@ -68,6 +68,6 @@ Before merging architecture-affecting changes:
 
 ## Session Guardrails
 
-- Runtime backend selection uses `~/.metaagent/config.toml` (`[backend].selected`), including `/backend` picker updates.
+- Runtime backend selection uses `~/.bob/config.toml` by default (`[backend].selected`), with legacy fallback to `~/.metaagent/config.toml`.
 - Session artifacts under `src/session_store.rs` remain scoped to per-session state only (`tasks.json`, planner/context/failure metadata).
 - Backend changes apply to newly created adapters in the current run; in-flight adapters are not swapped mid-request.

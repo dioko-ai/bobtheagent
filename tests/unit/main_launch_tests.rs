@@ -371,9 +371,10 @@ fn update_backend_selected_in_toml_rejects_non_table_backend_section() {
     let err = update_backend_selected_in_toml("backend = 1", BackendKind::Claude)
         .expect_err("non-table backend section should fail");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-    assert!(err
-        .to_string()
-        .contains("backend section is not a TOML table"));
+    assert!(
+        err.to_string()
+            .contains("backend section is not a TOML table")
+    );
 }
 
 #[test]
@@ -2197,16 +2198,54 @@ fn backend_command_opens_picker_and_closes_resume_picker() {
 }
 
 #[test]
+fn mouse_left_click_focuses_pane_from_click_position() {
+    let mut app = App::default();
+    app.active_pane = Pane::LeftBottom;
+    let screen = Rect::new(0, 0, 120, 40);
+    let click_column = 90;
+    let click_row = 10;
+    assert_eq!(
+        ui::pane_hit_test(screen, click_column, click_row),
+        Some(Pane::Right)
+    );
+
+    handle_mouse_left_click(&mut app, screen, click_column, click_row);
+
+    assert_eq!(app.active_pane, Pane::Right);
+}
+
+#[test]
+fn mouse_left_click_does_not_change_focus_when_picker_is_open() {
+    let mut app = App::default();
+    app.active_pane = Pane::LeftBottom;
+    app.open_resume_picker(vec![ResumeSessionOption {
+        session_dir: "/tmp/example".to_string(),
+        workspace: "workspace".to_string(),
+        title: Some("Session".to_string()),
+        created_at_label: Some("now".to_string()),
+        last_used_epoch_secs: 1,
+    }]);
+    let screen = Rect::new(0, 0, 120, 40);
+    let click_column = 90;
+    let click_row = 10;
+    assert_eq!(
+        ui::pane_hit_test(screen, click_column, click_row),
+        Some(Pane::Right)
+    );
+
+    handle_mouse_left_click(&mut app, screen, click_column, click_row);
+
+    assert_eq!(app.active_pane, Pane::LeftBottom);
+}
+
+#[test]
 fn apply_backend_selection_persists_and_reports_success() {
     with_temp_home("metaagent-backend-select-success", |_| {
         let mut app = App::default();
         let mut selected_backend = BackendKind::Codex;
         let mut model_routing = CodexAgentModelRouting::default();
-        let mut master_adapter = build_json_persistent_adapter(
-            &model_routing,
-            selected_backend,
-            CodexAgentKind::Master,
-        );
+        let mut master_adapter =
+            build_json_persistent_adapter(&model_routing, selected_backend, CodexAgentKind::Master);
         let mut master_report_adapter = build_json_persistent_adapter(
             &model_routing,
             selected_backend,
@@ -2282,11 +2321,8 @@ fn apply_backend_selection_persist_failure_keeps_in_memory_backend_and_reports_f
         let mut app = App::default();
         let mut selected_backend = BackendKind::Codex;
         let mut model_routing = CodexAgentModelRouting::default();
-        let mut master_adapter = build_json_persistent_adapter(
-            &model_routing,
-            selected_backend,
-            CodexAgentKind::Master,
-        );
+        let mut master_adapter =
+            build_json_persistent_adapter(&model_routing, selected_backend, CodexAgentKind::Master);
         let mut master_report_adapter = build_json_persistent_adapter(
             &model_routing,
             selected_backend,
@@ -2348,7 +2384,9 @@ fn apply_backend_selection_persist_failure_keeps_in_memory_backend_and_reports_f
         assert!(worker_agent_adapters.is_empty());
         let last = app.left_bottom_lines().last().expect("status message");
         assert!(last.contains("Backend set to Claude for this run"));
-        assert!(last.contains("persistence to ~/.metaagent/config.toml failed"));
+        assert!(last.contains("persistence to config.toml failed"));
+        assert!(last.contains("~/.bob/config.toml"));
+        assert!(last.contains("~/.metaagent/config.toml"));
         assert!(last.contains("New adapters in this run will still use this backend."));
     });
 }

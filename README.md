@@ -79,11 +79,11 @@ cd metaagent
 cargo build --release
 ```
 
-The binary will be at `target/release/metaagent-rust`.
+The binary will be at `target/release/bob`.
 
 ### Configure
 
-Bob stores its configuration in `~/.metaagent/config.toml`. A default config is created on first run. Key sections:
+Bob stores its configuration in `~/.bob/config.toml` (with legacy fallback to `~/.metaagent/config.toml`). A default config is created on first run. Key sections:
 
 **Model profiles** control which model and thinking effort are used:
 
@@ -118,7 +118,7 @@ worker_final_audit = "large-smart"
 
 ### Usage
 
-1. **Launch** — Run `metaagent-rust` in your project directory
+1. **Launch** — Run `bob` in your project directory
 2. **Describe your project** — The master planner creates a task graph
 3. **Review the plan** — Inspect and refine tasks in the planner view
 4. **Convert** — Type `/convert` to transform the plan into executable tasks
@@ -146,7 +146,7 @@ Pre-built binaries are available on the [GitHub Releases](https://github.com/ant
 cargo build --release
 ```
 
-The binary will be at `./target/release/metaagent-rust`.
+The binary will be at `./target/release/bob`.
 
 ### Linux
 
@@ -173,7 +173,7 @@ cargo build --release --locked
 
 ## Configuration
 
-Bob merges an embedded default configuration (`src/default_config.toml`) with the user config at `~/.metaagent/config.toml`. Missing keys are filled from defaults, so you only need to override what you want to change. The merged config is written back on every launch.
+Bob merges an embedded default configuration (`src/default_config.toml`) with the user config at `~/.bob/config.toml` (with legacy fallback to `~/.metaagent/config.toml`). Missing keys are filled from defaults, so you only need to override what you want to change. The merged config is written back on every launch.
 
 ### Backend selection
 
@@ -297,7 +297,7 @@ Bob exposes a JSON API via the CLI for scripting and automation.
 Pass `--output json` to get machine-readable JSON output:
 
 ```bash
-metaagent-rust --output json api <resource> <action>
+bob --output json api <resource> <action>
 ```
 
 ### Resources
