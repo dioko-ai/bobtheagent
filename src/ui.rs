@@ -18,11 +18,23 @@ const MAX_INPUT_TEXT_LINES: u16 = 5;
 const TEXT_PADDING: u16 = 1;
 const STATUS_HEIGHT: u16 = 3;
 const TITLE_BAR_HEIGHT: u16 = 3;
+const TAB_BAR_HEIGHT: u16 = 3;
+const NARROW_SCREEN_WIDTH: u16 = 100;
 const ACTIVE_TITLE_BG: Color = Color::Rgb(90, 145, 200);
 const ACTIVE_TITLE_FG: Color = Color::Black;
 const LEFT_TOP_PANE_PERCENT: u16 = 30;
 const LEFT_BOTTOM_PANE_PERCENT: u16 = 70;
-const STATUS_HELP_TEXT: &str = "Tab/Shift+Tab focus | Ctrl+U/Ctrl+D or PgUp/PgDn scroll main right pane | Wheel scrolls focused pane";
+const STATUS_HELP_TEXT_NARROW: &str =
+    "Tab/Shift+Tab switch views | Click tabs at top to switch | Click [^]/[v] buttons on right to scroll active tab by half-page | Ctrl+U/Ctrl+D or PgUp/PgDn scroll main right pane | Wheel scrolls focused pane";
+const STATUS_HELP_TEXT_WIDE: &str =
+    "Tab/Shift+Tab focus | Ctrl+U/Ctrl+D or PgUp/PgDn scroll main right pane | Wheel scrolls focused pane";
+const SCROLL_BUTTON_WIDTH: u16 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollButton {
+    Up,
+    Down,
+}
 
 #[derive(Debug, Clone)]
 struct ChatLinesCache {
@@ -35,16 +47,102 @@ thread_local! {
     static CHAT_LINES_CACHE: RefCell<Option<ChatLinesCache>> = const { RefCell::new(None) };
 }
 
-pub fn chat_input_text_width(screen: Rect) -> u16 {
-    let [body, _status] =
+fn split_body_and_status(screen: Rect) -> (Rect, Rect) {
+    let [body, status] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(STATUS_HEIGHT)]).areas(screen);
-    let [left, _right] =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
-    let [_left_top, left_bottom] = Layout::vertical([
+    (body, status)
+}
+
+fn pane_tab_rects(tab_bar: Rect) -> [Rect; 3] {
+    Layout::horizontal([
+        Constraint::Percentage(34),
+        Constraint::Percentage(33),
+        Constraint::Percentage(33),
+    ])
+    .areas(tab_bar)
+}
+
+fn is_narrow_layout(screen: Rect) -> bool {
+    let (body, _status) = split_body_and_status(screen);
+    body.width < NARROW_SCREEN_WIDTH
+}
+
+fn narrow_main_and_scroll_strip(screen: Rect) -> Option<(Rect, Rect)> {
+    if !is_narrow_layout(screen) {
+        return None;
+    }
+
+    let (body, _status) = split_body_and_status(screen);
+    if body.width <= SCROLL_BUTTON_WIDTH {
+        return Some((
+            body,
+            Rect::new(
+                body.x.saturating_add(body.width),
+                body.y,
+                0,
+                body.height,
+            ),
+        ));
+    }
+
+    let [main, scroll_strip] = Layout::horizontal([
+        Constraint::Min(0),
+        Constraint::Length(SCROLL_BUTTON_WIDTH),
+    ])
+    .areas(body);
+    Some((main, scroll_strip))
+}
+
+fn pane_areas(screen: Rect) -> ([Rect; 3], Option<Rect>) {
+    let (body, _status) = split_body_and_status(screen);
+    if let Some((main, _scroll_strip)) = narrow_main_and_scroll_strip(screen) {
+        let [tab_bar, content] = Layout::vertical([
+            Constraint::Length(TAB_BAR_HEIGHT),
+            Constraint::Min(0),
+        ])
+        .areas(main);
+        return ([content; 3], Some(tab_bar));
+    }
+
+    let [left, right] = Layout::horizontal([
+        Constraint::Percentage(50),
+        Constraint::Percentage(50),
+    ])
+    .areas(body);
+    let [left_top, left_bottom] = Layout::vertical([
         Constraint::Percentage(LEFT_TOP_PANE_PERCENT),
         Constraint::Percentage(LEFT_BOTTOM_PANE_PERCENT),
     ])
     .areas(left);
+    ([left_top, left_bottom, right], None)
+}
+
+fn pane_area(screen: Rect, pane: Pane) -> Rect {
+    let (panes, _) = pane_areas(screen);
+    match pane {
+        Pane::LeftTop => panes[0],
+        Pane::LeftBottom => panes[1],
+        Pane::Right => panes[2],
+    }
+}
+
+fn pane_scrollable_content_area(screen: Rect, pane: Pane) -> Rect {
+    let area = pane_area(screen, pane);
+    let [_title_area, content_area] =
+        Layout::vertical([Constraint::Length(TITLE_BAR_HEIGHT), Constraint::Min(0)]).areas(area);
+    content_area
+}
+
+fn overlay_target_area(screen: Rect, active_pane: Pane) -> Rect {
+    if is_narrow_layout(screen) {
+        pane_area(screen, active_pane)
+    } else {
+        pane_area(screen, Pane::Right)
+    }
+}
+
+pub fn chat_input_text_width(screen: Rect) -> u16 {
+    let left_bottom = pane_area(screen, Pane::LeftBottom);
     let [_title_bar, content] =
         Layout::vertical([Constraint::Length(TITLE_BAR_HEIGHT), Constraint::Min(0)])
             .areas(left_bottom);
@@ -52,15 +150,7 @@ pub fn chat_input_text_width(screen: Rect) -> u16 {
 }
 
 pub fn chat_max_scroll(screen: Rect, app: &App) -> u16 {
-    let [body, _status] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(STATUS_HEIGHT)]).areas(screen);
-    let [left, _right] =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
-    let [_left_top, left_bottom] = Layout::vertical([
-        Constraint::Percentage(LEFT_TOP_PANE_PERCENT),
-        Constraint::Percentage(LEFT_BOTTOM_PANE_PERCENT),
-    ])
-    .areas(left);
+    let left_bottom = pane_area(screen, Pane::LeftBottom);
     let [_title_bar, content] =
         Layout::vertical([Constraint::Length(TITLE_BAR_HEIGHT), Constraint::Min(0)])
             .areas(left_bottom);
@@ -84,15 +174,7 @@ pub fn chat_max_scroll(screen: Rect, app: &App) -> u16 {
 }
 
 pub fn left_top_max_scroll(screen: Rect, app: &App) -> u16 {
-    let [body, _status] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(STATUS_HEIGHT)]).areas(screen);
-    let [left, _right] =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
-    let [left_top, _left_bottom] = Layout::vertical([
-        Constraint::Percentage(LEFT_TOP_PANE_PERCENT),
-        Constraint::Percentage(LEFT_BOTTOM_PANE_PERCENT),
-    ])
-    .areas(left);
+    let left_top = pane_area(screen, Pane::LeftTop);
     let [_title_bar, content] =
         Layout::vertical([Constraint::Length(TITLE_BAR_HEIGHT), Constraint::Min(0)])
             .areas(left_top);
@@ -106,10 +188,7 @@ pub fn left_top_max_scroll(screen: Rect, app: &App) -> u16 {
 }
 
 pub fn right_max_scroll(screen: Rect, app: &App) -> u16 {
-    let [body, _status] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(STATUS_HEIGHT)]).areas(screen);
-    let [_left, right] =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
+    let right = pane_area(screen, Pane::Right);
     let [_title_bar, content] =
         Layout::vertical([Constraint::Length(TITLE_BAR_HEIGHT), Constraint::Min(0)]).areas(right);
     if content.width < 1 || content.height < 1 {
@@ -126,15 +205,22 @@ pub fn right_max_scroll(screen: Rect, app: &App) -> u16 {
 }
 
 pub fn pane_hit_test(screen: Rect, x: u16, y: u16) -> Option<Pane> {
-    let [body, _status] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(STATUS_HEIGHT)]).areas(screen);
-    let [left, right] =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
-    let [left_top, left_bottom] = Layout::vertical([
-        Constraint::Percentage(LEFT_TOP_PANE_PERCENT),
-        Constraint::Percentage(LEFT_BOTTOM_PANE_PERCENT),
-    ])
-    .areas(left);
+    let (panes, tab_bar) = pane_areas(screen);
+    let [left_top, left_bottom, right] = panes;
+
+    if let Some(tab_bar) = tab_bar {
+        let [left_top_tab, left_bottom_tab, right_tab] = pane_tab_rects(tab_bar);
+        if point_in_rect(left_top_tab, x, y) {
+            return Some(Pane::LeftTop);
+        }
+        if point_in_rect(left_bottom_tab, x, y) {
+            return Some(Pane::LeftBottom);
+        }
+        if point_in_rect(right_tab, x, y) {
+            return Some(Pane::Right);
+        }
+        return None;
+    }
 
     if point_in_rect(left_top, x, y) {
         return Some(Pane::LeftTop);
@@ -148,44 +234,134 @@ pub fn pane_hit_test(screen: Rect, x: u16, y: u16) -> Option<Pane> {
     None
 }
 
-pub fn render(frame: &mut Frame, app: &App, theme: &Theme) {
-    let [body, status] = Layout::vertical([Constraint::Min(0), Constraint::Length(STATUS_HEIGHT)])
-        .areas(frame.area());
-    let [left, right] =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
-    let [left_top, left_bottom] = Layout::vertical([
-        Constraint::Percentage(LEFT_TOP_PANE_PERCENT),
-        Constraint::Percentage(LEFT_BOTTOM_PANE_PERCENT),
-    ])
-    .areas(left);
+pub fn pane_scroll_button_hit_test(screen: Rect, pane: Pane, x: u16, y: u16) -> Option<ScrollButton> {
+    let [up_area, down_area] = pane_scroll_button_areas(screen, pane)?;
+    if point_in_rect(up_area, x, y) {
+        return Some(ScrollButton::Up);
+    }
+    if point_in_rect(down_area, x, y) {
+        return Some(ScrollButton::Down);
+    }
+    None
+}
 
-    render_worker_output_pane(
-        frame,
-        left_top,
-        app.active_pane == Pane::LeftTop,
-        app,
-        theme,
+pub fn pane_scroll_button_page_delta(screen: Rect, pane: Pane, app: &App) -> u16 {
+    let visible_lines = match pane {
+        Pane::LeftTop => {
+            let content = pane_scrollable_content_area(screen, Pane::LeftTop);
+            content.height.saturating_sub(TEXT_PADDING * 2)
+        }
+        Pane::LeftBottom => {
+            let left_bottom = pane_area(screen, Pane::LeftBottom);
+            let [_title_bar, content] =
+                Layout::vertical([Constraint::Length(TITLE_BAR_HEIGHT), Constraint::Min(0)])
+                    .areas(left_bottom);
+            if content.width < 1 || content.height < 2 {
+                return 0;
+            }
+            let input_text_width = content.width.saturating_sub(TEXT_PADDING * 2).max(1);
+            let input_text_lines = app.chat_input_line_count(input_text_width);
+            let max_input_height = content.height.saturating_sub(1).max(1);
+            let (input_height, _) = input_box_metrics(input_text_lines, 0, max_input_height);
+            let [messages_area, _input_area] =
+                Layout::vertical([Constraint::Min(1), Constraint::Length(input_height)])
+                    .areas(content);
+            messages_area.height.saturating_sub(TEXT_PADDING * 2)
+        }
+        Pane::Right => {
+            let content = pane_scrollable_content_area(screen, Pane::Right);
+            content.height.saturating_sub(TEXT_PADDING * 2)
+        }
+    };
+
+    if visible_lines == 0 {
+        0
+    } else {
+        (visible_lines / 2).max(1)
+    }
+}
+
+fn pane_scroll_state(screen: Rect, pane: Pane, app: &App) -> (u16, u16) {
+    match pane {
+        Pane::LeftTop => (app.left_top_scroll(), left_top_max_scroll(screen, app)),
+        Pane::LeftBottom => (app.left_bottom_scroll(), chat_max_scroll(screen, app)),
+        Pane::Right => (app.right_scroll(), right_max_scroll(screen, app)),
+    }
+}
+
+fn pane_scroll_button_areas(screen: Rect, _pane: Pane) -> Option<[Rect; 2]> {
+    let (_main, scroll_strip) = narrow_main_and_scroll_strip(screen)?;
+    if scroll_strip.width < SCROLL_BUTTON_WIDTH || scroll_strip.height < 2 {
+        return None;
+    }
+
+    let up_height = scroll_strip.height / 2;
+    if up_height == 0 {
+        return None;
+    }
+    let down_height = scroll_strip.height.saturating_sub(up_height);
+    let up_area = Rect::new(scroll_strip.x, scroll_strip.y, scroll_strip.width, up_height);
+    let down_area = Rect::new(
+        scroll_strip.x,
+        scroll_strip.y.saturating_add(up_height),
+        scroll_strip.width,
+        down_height,
     );
-    render_chat_pane(
-        frame,
-        left_bottom,
-        app,
-        app.active_pane == Pane::LeftBottom,
-        theme,
-    );
-    render_right_task_pane(frame, right, app, app.active_pane == Pane::Right, theme);
+    Some([up_area, down_area])
+}
+
+pub fn render(frame: &mut Frame, app: &App, theme: &Theme) {
+    let [_, status] = Layout::vertical([Constraint::Min(0), Constraint::Length(STATUS_HEIGHT)])
+        .areas(frame.area());
+    let (panes, tab_bar) = pane_areas(frame.area());
+    let [left_top, left_bottom, right] = panes;
+
+    if let Some(tab_bar) = tab_bar {
+        render_tab_bar(frame, tab_bar, app.active_pane, app, theme);
+        match app.active_pane {
+            Pane::LeftTop => render_worker_output_pane(frame, left_top, true, app, theme),
+            Pane::LeftBottom => render_chat_pane(frame, left_bottom, app, true, theme),
+            Pane::Right => render_right_task_pane(frame, right, app, true, theme),
+        }
+    } else {
+        render_worker_output_pane(
+            frame,
+            left_top,
+            app.active_pane == Pane::LeftTop,
+            app,
+            theme,
+        );
+        render_chat_pane(
+            frame,
+            left_bottom,
+            app,
+            app.active_pane == Pane::LeftBottom,
+            theme,
+        );
+        render_right_task_pane(frame, right, app, app.active_pane == Pane::Right, theme);
+    }
+
     if app.is_docs_attach_in_progress() {
-        render_center_overlay(frame, right, "Attaching Documentation...");
+        render_center_overlay(
+            frame,
+            overlay_target_area(frame.area(), app.active_pane),
+            "Attaching Documentation...",
+        );
     }
     if app.is_task_check_in_progress() {
-        render_center_overlay(frame, right, "Checking Tasks...");
+        render_center_overlay(
+            frame,
+            overlay_target_area(frame.area(), app.active_pane),
+            "Checking Tasks...",
+        );
     }
+    render_scroll_buttons(frame, frame.area(), app, theme);
 
     frame.render_widget(
         Block::default().style(Style::default().bg(theme.status_bg)),
         status,
     );
-    let help = Paragraph::new(status_line_text())
+    let help = Paragraph::new(status_line_text(frame.area()))
         .style(Style::default().bg(theme.status_bg).fg(theme.muted_fg))
         .block(
             Block::default()
@@ -198,6 +374,91 @@ pub fn render(frame: &mut Frame, app: &App, theme: &Theme) {
         render_resume_picker(frame, app, theme);
     } else if app.is_backend_picker_open() {
         render_backend_picker(frame, app, theme);
+    }
+}
+
+fn render_tab_bar(frame: &mut Frame, area: Rect, active: Pane, app: &App, theme: &Theme) {
+    if area.width < 1 || area.height < 1 {
+        return;
+    }
+
+    let [worker_tab, chat_tab, right_tab] = pane_tab_rects(area);
+    let tabs = [
+        (Pane::LeftTop, "Worker Output", worker_tab),
+        (Pane::LeftBottom, "Agent Chat", chat_tab),
+        (Pane::Right, app.right_pane_title(), right_tab),
+    ];
+
+    for (pane, title, tab_area) in tabs {
+        let active = pane == active;
+        let tab_bg = if active { ACTIVE_TITLE_BG } else { theme.status_bg };
+        let tab_fg = if active { ACTIVE_TITLE_FG } else { theme.muted_fg };
+
+        frame.render_widget(
+            Block::default().style(Style::default().bg(tab_bg)),
+            tab_area,
+        );
+        let title_y = tab_area.y + (tab_area.height.saturating_sub(1) / 2);
+        let title_area = Rect::new(tab_area.x, title_y, tab_area.width, 1);
+        frame.render_widget(
+            Paragraph::new(title)
+                .alignment(Alignment::Center)
+                .style(Style::default().bg(tab_bg).fg(tab_fg)),
+            title_area,
+        );
+    }
+}
+
+fn render_scroll_buttons(
+    frame: &mut Frame,
+    screen: Rect,
+    app: &App,
+    theme: &Theme,
+) {
+    if let Some([up_area, down_area]) = pane_scroll_button_areas(screen, app.active_pane) {
+        let (scroll_position, max_scroll) = pane_scroll_state(screen, app.active_pane, app);
+        let up_enabled = scroll_position > 0;
+        let down_enabled = scroll_position < max_scroll;
+        let button_bg = theme.status_bg;
+        let inactive_fg = theme.muted_fg;
+        let active_fg = theme.text_fg;
+        let up_glyph_area = Rect::new(
+            up_area.x,
+            up_area.y.saturating_add(up_area.height.saturating_sub(1) / 2),
+            up_area.width,
+            1,
+        );
+        let down_glyph_area = Rect::new(
+            down_area.x,
+            down_area
+                .y
+                .saturating_add(down_area.height.saturating_sub(1) / 2),
+            down_area.width,
+            1,
+        );
+
+        frame.render_widget(Block::default().style(Style::default().bg(button_bg)), up_area);
+        frame.render_widget(
+            Paragraph::new("^")
+                .alignment(Alignment::Center)
+                .style(Style::default().bg(button_bg).fg(if up_enabled {
+                    active_fg
+                } else {
+                    inactive_fg
+                })),
+            up_glyph_area,
+        );
+        frame.render_widget(Block::default().style(Style::default().bg(button_bg)), down_area);
+        frame.render_widget(
+            Paragraph::new("v")
+                .alignment(Alignment::Center)
+                .style(Style::default().bg(button_bg).fg(if down_enabled {
+                    active_fg
+                } else {
+                    inactive_fg
+                })),
+            down_glyph_area,
+        );
     }
 }
 
@@ -247,8 +508,12 @@ fn render_worker_output_pane(
     );
 }
 
-fn status_line_text() -> String {
-    STATUS_HELP_TEXT.to_string()
+fn status_line_text(screen: Rect) -> String {
+    if is_narrow_layout(screen) {
+        STATUS_HELP_TEXT_NARROW.to_string()
+    } else {
+        STATUS_HELP_TEXT_WIDE.to_string()
+    }
 }
 
 fn master_working_dots(ticks: u64) -> &'static str {
@@ -789,10 +1054,7 @@ fn wrap_text_lines(text: &str, width: u16) -> Vec<String> {
 }
 
 fn right_pane_layout(screen: Rect) -> [Rect; 2] {
-    let [body, _status] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(STATUS_HEIGHT)]).areas(screen);
-    let [_left, right] =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
+    let right = pane_area(screen, Pane::Right);
     Layout::vertical([Constraint::Length(TITLE_BAR_HEIGHT), Constraint::Min(0)]).areas(right)
 }
 

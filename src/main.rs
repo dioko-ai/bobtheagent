@@ -2258,16 +2258,75 @@ fn handle_mouse_left_click(app: &mut App, screen: Rect, column: u16, row: u16) {
         return;
     }
 
+    if let Some(scroll_button) = ui::pane_scroll_button_hit_test(screen, app.active_pane, column, row) {
+        apply_half_page_scroll(app, screen, scroll_button);
+        return;
+    }
+
     if let Some(pane) = ui::pane_hit_test(screen, column, row) {
         app.active_pane = pane;
     }
 
-    if app.is_planner_mode() {
+    if app.is_planner_mode() && app.active_pane == Pane::Right {
         if let Some(cursor) = ui::planner_cursor_hit_test(screen, app, column, row) {
             app.set_planner_cursor(cursor);
         }
-    } else if let Some(task_key) = ui::right_pane_toggle_hit_test(screen, app, column, row) {
+    } else if app.active_pane == Pane::Right
+        && let Some(task_key) = ui::right_pane_toggle_hit_test(screen, app, column, row)
+    {
         app.toggle_task_details(&task_key);
+    }
+}
+
+fn apply_half_page_scroll(app: &mut App, screen: Rect, button: ui::ScrollButton) {
+    let pane = app.active_pane;
+    let delta = ui::pane_scroll_button_page_delta(screen, pane, app);
+    if delta == 0 {
+        return;
+    }
+
+    match button {
+        ui::ScrollButton::Up => match pane {
+            Pane::LeftTop => {
+                for _ in 0..delta {
+                    app.scroll_up();
+                }
+            }
+            Pane::LeftBottom => {
+                for _ in 0..delta {
+                    app.scroll_chat_up();
+                }
+            }
+            Pane::Right => {
+                for _ in 0..delta {
+                    app.scroll_right_up();
+                }
+            }
+        },
+        ui::ScrollButton::Down => {
+            let max_scroll = match pane {
+                Pane::LeftTop => ui::left_top_max_scroll(screen, app),
+                Pane::LeftBottom => ui::chat_max_scroll(screen, app),
+                Pane::Right => ui::right_max_scroll(screen, app),
+            };
+            match pane {
+                Pane::LeftTop => {
+                    for _ in 0..delta {
+                        app.scroll_left_top_down(max_scroll);
+                    }
+                }
+                Pane::LeftBottom => {
+                    for _ in 0..delta {
+                        app.scroll_chat_down(max_scroll);
+                    }
+                }
+                Pane::Right => {
+                    for _ in 0..delta {
+                        app.scroll_right_down(max_scroll);
+                    }
+                }
+            }
+        }
     }
 }
 

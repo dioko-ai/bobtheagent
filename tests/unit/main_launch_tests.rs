@@ -2239,6 +2239,97 @@ fn mouse_left_click_does_not_change_focus_when_picker_is_open() {
 }
 
 #[test]
+fn mouse_left_click_in_narrow_mode_switches_focus_by_tab() {
+    let mut app = App::default();
+    app.active_pane = Pane::LeftBottom;
+    let screen = Rect::new(0, 0, 80, 24);
+    let click_column = 1;
+    let click_row = 1;
+
+    assert_eq!(
+        ui::pane_hit_test(screen, click_column, click_row),
+        Some(Pane::LeftTop)
+    );
+
+    handle_mouse_left_click(&mut app, screen, click_column, click_row);
+
+    assert_eq!(app.active_pane, Pane::LeftTop);
+}
+
+#[test]
+fn mouse_left_click_scroll_button_scrolls_active_pane_down_by_half_page_in_narrow_layout() {
+    let mut app = App::default();
+    app.set_right_pane_mode(RightPaneMode::TaskList);
+    app.sync_planner_tasks_from_file(
+        (0..40)
+            .map(|idx| PlannerTaskFileEntry {
+                id: format!("task-{idx}"),
+                title: format!("Task {idx}"),
+                details: format!("details for {idx}"),
+                docs: Vec::new(),
+                kind: PlannerTaskKindFile::Task,
+                status: PlannerTaskStatusFile::Pending,
+                parent_id: None,
+                order: Some(idx as u32),
+            })
+            .collect(),
+    )
+    .expect("seed planner tasks");
+
+    let screen = Rect::new(0, 0, 80, 24);
+    app.active_pane = Pane::Right;
+    let half_page = ui::pane_scroll_button_page_delta(screen, Pane::Right, &app);
+    let max_scroll = ui::right_max_scroll(screen, &app);
+    assert!(max_scroll > 0);
+
+    let down = {
+        let mut down = None;
+        for y in screen.y..screen.y.saturating_add(screen.height) {
+            for x in screen.x..screen.x.saturating_add(screen.width) {
+                if ui::pane_scroll_button_hit_test(screen, Pane::Right, x, y)
+                    == Some(ui::ScrollButton::Down)
+                {
+                    down = Some((x, y));
+                    break;
+                }
+            }
+            if down.is_some() {
+                break;
+            }
+        }
+        down.expect("down button should be present")
+    };
+
+    handle_mouse_left_click(&mut app, screen, down.0, down.1);
+    assert_eq!(app.right_scroll(), half_page.min(max_scroll));
+
+    let up = {
+        let mut up = None;
+        for y in screen.y..screen.y.saturating_add(screen.height) {
+            for x in screen.x..screen.x.saturating_add(screen.width) {
+                if ui::pane_scroll_button_hit_test(screen, Pane::Right, x, y)
+                    == Some(ui::ScrollButton::Up)
+                {
+                    up = Some((x, y));
+                    break;
+                }
+            }
+            if up.is_some() {
+                break;
+            }
+        }
+        up.expect("up button should be present")
+    };
+
+    handle_mouse_left_click(&mut app, screen, up.0, up.1);
+    let expected_down = half_page.min(max_scroll);
+    assert_eq!(app.right_scroll(), expected_down.saturating_sub(half_page));
+
+    handle_mouse_left_click(&mut app, screen, up.0, up.1);
+    assert_eq!(app.right_scroll(), expected_down.saturating_sub(half_page));
+}
+
+#[test]
 fn apply_backend_selection_persists_and_reports_success() {
     with_temp_home("metaagent-backend-select-success", |_| {
         let mut app = App::default();

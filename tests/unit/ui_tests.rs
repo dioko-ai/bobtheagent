@@ -27,6 +27,10 @@ fn buffer_to_string(buffer: &Buffer) -> String {
     text
 }
 
+fn find_text_x(text: &str, needle: &str) -> Option<usize> {
+    text.lines().find_map(|line| line.find(needle))
+}
+
 fn seed_execution_plan(app: &mut App) {
     app.sync_planner_tasks_from_file(vec![
         PlannerTaskFileEntry {
@@ -71,9 +75,30 @@ fn render_shows_three_panes_and_help_text() {
     assert!(text.contains("Agent Chat"));
     assert!(text.contains("Planner Markdown"));
     assert!(!text.contains("quit"));
+    assert!(text.contains("Tab/Shift+Tab"));
     assert!(text.contains("Ctrl+U/Ctrl+D"));
     assert!(text.contains("PgUp/PgDn"));
-    assert!(text.contains("Wheel scrolls focused pane"));
+    assert!(text.contains("Wheel"));
+    assert!(text.contains("scroll"));
+    assert!(text.contains("focus"));
+    assert!(!text.contains("Click tabs at top to switch"));
+}
+
+#[test]
+fn render_shows_tabs_in_narrow_mode() {
+    let app = App::default();
+    let text = render_text(&app, 80, 24);
+    assert!(text.contains("Worker Output"));
+    assert!(text.contains("Agent Chat"));
+    assert!(text.contains("Planner Markdown"));
+    assert!(text.contains("Click tabs at top to switch"));
+    assert!(!text.contains("Sub-agent output stream."));
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(lines.len() >= 4);
+    assert!(lines[1].contains("Worker Output"));
+    assert!(lines[1].contains("Agent Chat"));
+    assert!(lines[1].contains("Planner Markdown"));
+    assert!(!lines[0].contains("Worker Output"));
 }
 
 #[test]
@@ -225,6 +250,16 @@ fn render_shows_task_check_overlay_when_running() {
     let text = render_text(&app, 120, 30);
     assert!(text.contains("Checking Tasks..."));
     assert!(text.contains("Agent Chat | Working ["));
+}
+
+#[test]
+fn render_shows_overlay_in_right_pane_on_wide_layout() {
+    let mut app = App::default();
+    app.active_pane = Pane::LeftBottom;
+    app.set_task_check_in_progress(true);
+    let text = render_text(&app, 120, 30);
+    let overlay_x = find_text_x(&text, "Checking Tasks...").expect("overlay text should render");
+    assert!(overlay_x >= 60, "overlay should remain in the right pane");
 }
 
 #[test]
@@ -642,6 +677,64 @@ fn pane_hit_test_identifies_each_pane() {
     let right_x = right.x + right.width.saturating_sub(1).min(1);
     let right_y = right.y + right.height.saturating_sub(1).min(1);
     assert_eq!(pane_hit_test(screen, right_x, right_y), Some(Pane::Right));
+}
+
+#[test]
+fn pane_hit_test_uses_tabs_in_narrow_layout() {
+    let screen = Rect::new(0, 0, 80, 24);
+    assert_eq!(pane_hit_test(screen, 1, 1), Some(Pane::LeftTop));
+    assert_eq!(pane_hit_test(screen, 40, 1), Some(Pane::LeftBottom));
+    assert_eq!(pane_hit_test(screen, 76, 1), Some(Pane::Right));
+    assert_eq!(pane_hit_test(screen, 79, 1), None);
+    assert_eq!(pane_hit_test(screen, 1, 10), None);
+}
+
+fn find_scroll_button(screen: Rect, pane: Pane, target: ScrollButton) -> (u16, u16) {
+    for y in screen.y..screen.y.saturating_add(screen.height) {
+        for x in screen.x..screen.x.saturating_add(screen.width) {
+            if pane_scroll_button_hit_test(screen, pane, x, y) == Some(target) {
+                return (x, y);
+            }
+        }
+    }
+    panic!("scroll button should be present");
+}
+
+#[test]
+fn pane_scroll_buttons_are_only_visible_in_narrow_layout() {
+    let app = App::default();
+    let screen = Rect::new(0, 0, 120, 40);
+    assert!(pane_scroll_button_hit_test(screen, Pane::Right, 0, 0).is_none());
+    assert!(pane_scroll_button_hit_test(screen, Pane::Right, screen.width.saturating_sub(1), screen.height.saturating_sub(1))
+        .is_none());
+    let narrow_screen = Rect::new(0, 0, 80, 24);
+    let [body, status] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(STATUS_HEIGHT)]).areas(narrow_screen);
+    let strip_x = body.x.saturating_add(body.width.saturating_sub(1));
+    let top_y = body.y;
+    let split_y = body.y.saturating_add(body.height / 2);
+    let bottom_y = body.y.saturating_add(body.height.saturating_sub(1));
+    assert_eq!(
+        pane_scroll_button_hit_test(narrow_screen, Pane::LeftBottom, strip_x, top_y),
+        Some(ScrollButton::Up)
+    );
+    assert_eq!(
+        pane_scroll_button_hit_test(narrow_screen, Pane::LeftBottom, strip_x, split_y),
+        Some(ScrollButton::Down)
+    );
+    assert_eq!(
+        pane_scroll_button_hit_test(narrow_screen, Pane::LeftBottom, strip_x, bottom_y),
+        Some(ScrollButton::Down)
+    );
+    assert!(
+        pane_scroll_button_hit_test(narrow_screen, Pane::LeftBottom, strip_x, status.y).is_none()
+    );
+    let narrow_up = find_scroll_button(narrow_screen, Pane::LeftBottom, ScrollButton::Up);
+    assert_eq!(
+        pane_scroll_button_hit_test(narrow_screen, Pane::LeftBottom, narrow_up.0, narrow_up.1),
+        Some(ScrollButton::Up)
+    );
+    assert!(pane_scroll_button_page_delta(screen, Pane::Right, &app) > 0);
 }
 
 #[test]
