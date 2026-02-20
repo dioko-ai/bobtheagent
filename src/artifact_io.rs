@@ -10,8 +10,9 @@ use std::{fs::Permissions, os::unix::fs::PermissionsExt};
 
 use crate::default_config::DEFAULT_CONFIG_TOML;
 
-const APP_DIR_NAME: &str = ".bob";
-const LEGACY_APP_DIR_NAME: &str = ".metaagent";
+const APP_DIR_NAME: &str = ".agentbob";
+const LEGACY_APP_DIR_NAME: &str = ".bob";
+const OLDEST_LEGACY_APP_DIR_NAME: &str = ".metaagent";
 const CONFIG_FILE_NAME: &str = "config.toml";
 
 pub fn read_text_file(path: &Path) -> io::Result<String> {
@@ -56,6 +57,7 @@ pub fn runtime_storage_dir() -> io::Result<PathBuf> {
 fn resolve_runtime_storage_dir(home: &Path) -> PathBuf {
     let current = home.join(APP_DIR_NAME);
     let legacy = home.join(LEGACY_APP_DIR_NAME);
+    let oldest_legacy = home.join(OLDEST_LEGACY_APP_DIR_NAME);
     let current_config = current.join(CONFIG_FILE_NAME);
     if current_config.exists() {
         return current;
@@ -64,20 +66,29 @@ fn resolve_runtime_storage_dir(home: &Path) -> PathBuf {
     if legacy_config.exists() {
         return legacy;
     }
+    let oldest_legacy_config = oldest_legacy.join(CONFIG_FILE_NAME);
+    if oldest_legacy_config.exists() {
+        return oldest_legacy;
+    }
     if current.exists() {
         return current;
     }
     if legacy.exists() {
         return legacy;
     }
+    if oldest_legacy.exists() {
+        return oldest_legacy;
+    }
     current
 }
 
 fn default_storage_root_for_config_dir(config_dir: &Path) -> &'static str {
-    if config_dir.ends_with(LEGACY_APP_DIR_NAME) {
+    if config_dir.ends_with(OLDEST_LEGACY_APP_DIR_NAME) {
         "~/.metaagent/sessions"
-    } else {
+    } else if config_dir.ends_with(LEGACY_APP_DIR_NAME) {
         "~/.bob/sessions"
+    } else {
+        "~/.agentbob/sessions"
     }
 }
 
@@ -176,10 +187,15 @@ fn write_legacy_compat_config_if_missing(active_config_file: &Path, merged_text:
         return;
     };
     let legacy_file = home.join(LEGACY_APP_DIR_NAME).join(CONFIG_FILE_NAME);
-    if legacy_file.exists() {
-        return;
+    if !legacy_file.exists() {
+        let _ = write_text_file_atomic(&legacy_file, merged_text);
     }
-    let _ = write_text_file_atomic(&legacy_file, merged_text);
+    let oldest_legacy_file = home
+        .join(OLDEST_LEGACY_APP_DIR_NAME)
+        .join(CONFIG_FILE_NAME);
+    if !oldest_legacy_file.exists() {
+        let _ = write_text_file_atomic(&oldest_legacy_file, merged_text);
+    }
 }
 
 fn write_text_file_atomic(path: &Path, text: &str) -> io::Result<()> {

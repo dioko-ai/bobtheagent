@@ -1,8 +1,8 @@
 [storage]
-root_dir = "~/.bob/sessions"
+root_dir = "~/.agentbob/sessions"
 
 # Default backend routing for newly created adapters.
-# Runtime `/backend` updates persist this value to ~/.bob/config.toml.
+# Runtime `/backend` updates persist this value to ~/.agentbob/config.toml.
 [backend]
 selected = "codex"
 

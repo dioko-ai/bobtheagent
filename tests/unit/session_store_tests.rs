@@ -1,5 +1,45 @@
 use super::*;
 use std::fs;
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn with_temp_home<T>(prefix: &str, f: impl FnOnce(&Path) -> T) -> T {
+    let _guard = crate::artifact_io::home_env_test_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let temp_home = std::env::temp_dir().join(format!(
+        "{prefix}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should work")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_home).expect("create temp home");
+
+    let prior_home = std::env::var_os("HOME");
+    // SAFETY: tests serialize HOME mutation with HOME_LOCK and restore afterward.
+    unsafe {
+        std::env::set_var("HOME", &temp_home);
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&temp_home)));
+
+    // SAFETY: restoration mirrors the guarded mutation above.
+    unsafe {
+        if let Some(value) = prior_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+    fs::remove_dir_all(&temp_home).ok();
+
+    match result {
+        Ok(value) => value,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
 
 #[test]
 fn expands_home_paths() {
@@ -11,7 +51,7 @@ fn expands_home_paths() {
 fn embedded_default_config_includes_storage_section() {
     let parsed: MetaAgentConfig = toml::from_str(crate::default_config::DEFAULT_CONFIG_TOML)
         .expect("embedded default config should parse");
-    assert_eq!(parsed.storage.root_dir, "~/.bob/sessions");
+    assert_eq!(parsed.storage.root_dir, "~/.agentbob/sessions");
 }
 
 #[test]
@@ -41,7 +81,37 @@ fn metaagent_config_storage_falls_back_when_storage_section_missing() {
         "#,
     )
     .expect("partial config should parse");
-    assert_eq!(parsed.storage.root_dir, "~/.bob/sessions");
+    assert_eq!(parsed.storage.root_dir, "~/.agentbob/sessions");
+}
+
+#[test]
+fn initialize_uses_agentbob_sessions_by_default_in_fresh_home() {
+    with_temp_home("session-store-agentbob-default", |home| {
+        let cwd = std::env::current_dir().expect("cwd");
+        let store = SessionStore::initialize(&cwd).expect("initialize store");
+        assert!(store.session_dir().starts_with(home.join(".agentbob/sessions")));
+    });
+}
+
+#[test]
+fn initialize_preserves_metaagent_storage_fallback_when_legacy_config_exists() {
+    with_temp_home("session-store-metaagent-fallback", |home| {
+        let legacy_config = home.join(".metaagent/config.toml");
+        fs::create_dir_all(legacy_config.parent().expect("legacy config parent"))
+            .expect("create legacy config dir");
+        fs::write(
+            &legacy_config,
+            r#"
+            [backend]
+            selected = "claude"
+            "#,
+        )
+        .expect("write legacy config");
+
+        let cwd = std::env::current_dir().expect("cwd");
+        let store = SessionStore::initialize(&cwd).expect("initialize store");
+        assert!(store.session_dir().starts_with(home.join(".metaagent/sessions")));
+    });
 }
 
 #[test]

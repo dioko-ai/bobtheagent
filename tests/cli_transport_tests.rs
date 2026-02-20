@@ -1,18 +1,65 @@
 use serde_json::Value;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+fn agentbob_binary_path_from_cargo() -> Option<PathBuf> {
+    option_env!("CARGO_BIN_EXE_agentbob").map(PathBuf::from)
+}
+
+fn cli_binary_path_for_invocation() -> PathBuf {
+    if let Some(path) = agentbob_binary_path_from_cargo() {
+        return path;
+    }
+
+    if let Some(path) = option_env!("CARGO_BIN_EXE_bob") {
+        return PathBuf::from(path);
+    }
+
+    std::env::var("CARGO_BIN_EXE_agentbob")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("CARGO_BIN_EXE_bob").map(PathBuf::from))
+        .expect("expected Cargo to expose a CLI binary path for integration tests")
+}
+
 fn run_cli(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_bob"))
+    Command::new(cli_binary_path_for_invocation())
         .args(args)
         .output()
         .expect("run cli")
 }
 
+fn run_cli_as_agentbob(args: &[&str]) -> Output {
+    let temp = TempDirGuard::new("agentbob-cli-alias");
+    let alias_binary = write_agentbob_alias_binary(temp.path());
+    Command::new(&alias_binary)
+        .args(args)
+        .output()
+        .expect("run cli via agentbob alias")
+}
+
+fn write_agentbob_alias_binary(dir: &Path) -> PathBuf {
+    let source_binary = cli_binary_path_for_invocation();
+    let alias_binary = dir.join(if cfg!(windows) {
+        "agentbob.exe"
+    } else {
+        "agentbob"
+    });
+    fs::copy(&source_binary, &alias_binary).unwrap_or_else(|err| {
+        panic!(
+            "failed to create agentbob alias {} from {}: {err}",
+            alias_binary.display(),
+            source_binary.display()
+        )
+    });
+    alias_binary
+}
+
 fn run_cli_in_home(home: &std::path::Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_bob"))
+    Command::new(cli_binary_path_for_invocation())
         .env("HOME", home)
         .args(args)
         .output()
@@ -27,8 +74,16 @@ fn stderr_text(output: &Output) -> String {
     String::from_utf8(output.stderr.clone()).expect("stderr utf8")
 }
 
-fn cli_binary_path() -> &'static std::path::Path {
-    std::path::Path::new(env!("CARGO_BIN_EXE_bob"))
+fn assert_agentbob_usage(text: &str) {
+    assert!(text.contains("Usage: agentbob "));
+    assert!(
+        !text.contains("Usage: bob "),
+        "usage output should not reference legacy bob command identity"
+    );
+}
+
+fn cli_binary_path() -> PathBuf {
+    cli_binary_path_for_invocation()
 }
 
 fn stdout_json(output: &Output) -> Value {
@@ -63,7 +118,25 @@ impl Drop for TempDirGuard {
 }
 
 #[test]
-fn transport_test_binary_resolution_targets_bob_executable() {
+fn transport_test_binary_resolution_targets_agentbob_executable() {
+    let runtime_agentbob = std::env::var("CARGO_BIN_EXE_agentbob").ok().map(PathBuf::from);
+    assert_eq!(
+        runtime_agentbob,
+        agentbob_binary_path_from_cargo(),
+        "compile-time and runtime CARGO_BIN_EXE_agentbob should agree"
+    );
+    if let Some(from_cargo) = runtime_agentbob {
+        let from_cargo_name = from_cargo
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("CARGO_BIN_EXE_agentbob should have UTF-8 filename")
+            .to_ascii_lowercase();
+        assert!(
+            from_cargo_name == "agentbob" || from_cargo_name == "agentbob.exe",
+            "expected CARGO_BIN_EXE_agentbob filename to be agentbob, got: {from_cargo_name}"
+        );
+    }
+
     let binary = cli_binary_path();
     let binary_name = binary
         .file_name()
@@ -71,24 +144,24 @@ fn transport_test_binary_resolution_targets_bob_executable() {
         .expect("binary path should have UTF-8 filename")
         .to_ascii_lowercase();
     assert!(
-        binary_name == "bob" || binary_name == "bob.exe",
-        "expected integration-test binary to resolve to bob, got: {binary_name}"
+        matches!(binary_name.as_str(), "agentbob" | "agentbob.exe" | "bob" | "bob.exe"),
+        "expected integration-test binary to resolve to bob/agentbob, got: {binary_name}"
     );
     assert!(
-        binary.exists(),
+        Path::new(&binary).exists(),
         "resolved integration-test binary path should exist: {}",
         binary.display()
     );
 }
 
 #[test]
-fn help_output_uses_bob_command_identity() {
-    let output = run_cli(&["--help"]);
+fn help_output_uses_agentbob_command_identity() {
+    let output = run_cli_as_agentbob(&["--help"]);
     assert_eq!(output.status.code(), Some(0));
 
     let stdout = stdout_text(&output);
-    assert!(stdout.contains("Usage: bob "));
-    assert!(stdout.contains("bob [OPTIONS]"));
+    assert_agentbob_usage(&stdout);
+    assert!(stdout.contains("agentbob [OPTIONS]"));
 }
 
 #[test]
@@ -206,20 +279,66 @@ fn capability_list_json_output_has_expected_shape() {
 
 #[test]
 fn unknown_argument_returns_invalid_usage_error() {
-    let output = run_cli(&["--definitely-unknown-flag"]);
+    let output = run_cli_as_agentbob(&["--definitely-unknown-flag"]);
 
     assert_ne!(output.status.code(), Some(0));
     let stderr = stderr_text(&output);
     assert!(stderr.contains("Unknown argument:"));
+    assert_agentbob_usage(&stderr);
 }
 
 #[test]
 fn missing_required_flag_returns_usage_error() {
-    let output = run_cli(&["api", "capability", "get"]);
+    let output = run_cli_as_agentbob(&["api", "capability", "get"]);
 
     assert_ne!(output.status.code(), Some(0));
     let stderr = stderr_text(&output);
+    assert_agentbob_usage(&stderr);
     assert!(stderr.contains("--id <ID>"));
+}
+
+#[test]
+fn scriptability_examples_script_passes_with_agentbob_named_binary() {
+    let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("scripts")
+        .join("cli_scriptability_examples.sh");
+    assert!(script_path.exists(), "missing script at {}", script_path.display());
+
+    let temp = TempDirGuard::new("agentbob-cli-scriptability");
+    let alias_binary = write_agentbob_alias_binary(temp.path());
+    let output = Command::new("bash")
+        .arg(&script_path)
+        .arg(&alias_binary)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run cli scriptability smoke script");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "script stdout:\n{}\nscript stderr:\n{}",
+        stdout_text(&output),
+        stderr_text(&output)
+    );
+    assert!(stdout_text(&output).contains("All scriptability checks passed."));
+}
+
+#[test]
+fn scriptability_examples_script_defaults_to_agentbob_with_legacy_bob_fallback() {
+    let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("scripts")
+        .join("cli_scriptability_examples.sh");
+    let script_text =
+        std::fs::read_to_string(&script_path).expect("read cli scriptability examples script");
+
+    assert!(
+        script_text.contains("BIN_PATH=\"${1:-target/debug/agentbob}\""),
+        "script should default to target/debug/agentbob for automation docs and examples"
+    );
+    assert!(
+        script_text.contains("target/debug/bob"),
+        "script should preserve legacy bob fallback for compatibility"
+    );
 }
 
 #[test]
@@ -262,7 +381,7 @@ fn invalid_task_graph_maps_to_validation_failed_exit_code_and_error_code() {
     .expect("write invalid tasks file");
 
     let tasks_file_arg = tasks_file.to_string_lossy().to_string();
-    let output = Command::new(env!("CARGO_BIN_EXE_bob"))
+    let output = Command::new(cli_binary_path_for_invocation())
         .args([
             "--output",
             "json",
@@ -295,7 +414,7 @@ fn malformed_tasks_json_returns_invalid_request_parse_contract() {
         .expect("write malformed tasks file");
 
     let tasks_file_arg = tasks_file.to_string_lossy().to_string();
-    let output = Command::new(env!("CARGO_BIN_EXE_bob"))
+    let output = Command::new(cli_binary_path_for_invocation())
         .args([
             "--output",
             "json",

@@ -101,23 +101,25 @@ fn ensure_default_metaagent_config_falls_back_to_legacy_when_only_legacy_config_
             runtime_storage_dir().expect("resolve runtime storage dir"),
             home.join(".metaagent")
         );
+        let config_text = fs::read_to_string(&active_config).expect("read active config");
+        assert!(config_text.contains("root_dir = \"~/.metaagent/sessions\""));
     });
 }
 
 #[test]
-fn ensure_default_metaagent_config_initializes_fresh_home_under_bob() {
+fn ensure_default_metaagent_config_initializes_fresh_home_under_agentbob() {
     with_temp_home("artifact-io-fresh-init", |home| {
-        let expected_config = home.join(".bob/config.toml");
+        let expected_config = home.join(".agentbob/config.toml");
         let active_config = ensure_default_metaagent_config().expect("initialize default config");
         assert_eq!(active_config, expected_config);
         assert!(expected_config.exists());
         assert_eq!(
             runtime_storage_dir().expect("resolve runtime storage dir"),
-            home.join(".bob")
+            home.join(".agentbob")
         );
 
         let config_text = fs::read_to_string(&expected_config).expect("read initialized config");
-        assert!(config_text.contains("root_dir = \"~/.bob/sessions\""));
+        assert!(config_text.contains("root_dir = \"~/.agentbob/sessions\""));
     });
 }
 
@@ -125,13 +127,17 @@ fn ensure_default_metaagent_config_initializes_fresh_home_under_bob() {
 fn ensure_default_metaagent_config_writes_legacy_compat_file_when_missing() {
     with_temp_home("artifact-io-legacy-compat-create", |home| {
         let active_config = ensure_default_metaagent_config().expect("initialize default config");
+        let bob_legacy_config = home.join(".bob/config.toml");
         let legacy_config = home.join(".metaagent/config.toml");
 
-        assert_eq!(active_config, home.join(".bob/config.toml"));
+        assert_eq!(active_config, home.join(".agentbob/config.toml"));
+        assert!(bob_legacy_config.exists());
         assert!(legacy_config.exists());
 
         let active_text = fs::read_to_string(&active_config).expect("read active config");
+        let bob_legacy_text = fs::read_to_string(&bob_legacy_config).expect("read bob legacy config");
         let legacy_text = fs::read_to_string(&legacy_config).expect("read legacy config");
+        assert_eq!(bob_legacy_text, active_text);
         assert_eq!(legacy_text, active_text);
     });
 }
@@ -177,6 +183,27 @@ fn runtime_storage_dir_prefers_bob_when_both_dirs_exist_without_configs() {
         assert_eq!(
             runtime_storage_dir().expect("resolve runtime storage dir"),
             home.join(".bob")
+        );
+    });
+}
+
+#[test]
+fn runtime_storage_dir_prefers_agentbob_config_over_legacy_metaagent_config() {
+    with_temp_home("artifact-io-agentbob-over-metaagent-config", |home| {
+        let current_config = home.join(".agentbob/config.toml");
+        let legacy_config = home.join(".metaagent/config.toml");
+        fs::create_dir_all(current_config.parent().expect("current config parent"))
+            .expect("create current config dir");
+        fs::create_dir_all(legacy_config.parent().expect("legacy config parent"))
+            .expect("create legacy config dir");
+        fs::write(&current_config, "[backend]\nselected = \"codex\"\n")
+            .expect("write current config");
+        fs::write(&legacy_config, "[backend]\nselected = \"claude\"\n")
+            .expect("write legacy config");
+
+        assert_eq!(
+            runtime_storage_dir().expect("resolve runtime storage dir"),
+            home.join(".agentbob")
         );
     });
 }

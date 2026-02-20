@@ -1,17 +1,17 @@
-# Bob The Agent
+# AgentBob
 
-<img width="300" alt="bob-the-agent" src="https://github.com/user-attachments/assets/1d2563a3-316d-40ae-92a6-d9bd232fb517" />
+<img width="300" alt="agentbob" src="https://github.com/user-attachments/assets/1d2563a3-316d-40ae-92a6-d9bd232fb517" />
 
 
 **A lightning-fast AI orchestrator that decomposes complex coding tasks into agent-driven workflows — built in Rust.**
 
-## What is Bob?
+## What is AgentBob?
 
-Bob is a TUI and CLI tool that acts as a master planner for software engineering tasks. You describe what you want built, and Bob decomposes your request into a structured task graph, then dispatches a team of specialized AI agents to execute each step — with built-in quality gates and retry loops to ensure correctness.
+AgentBob is a TUI and CLI tool that acts as a master planner for software engineering tasks. You describe what you want built, and AgentBob decomposes your request into a structured task graph, then dispatches a team of specialized AI agents to execute each step — with built-in quality gates and retry loops to ensure correctness.
 
-The multi-agent workflow follows a rigorous pipeline: **Implementor** writes the code, an **Auditor** reviews the implementation, a **Test Writer** generates tests, a **Test Runner** executes them, and a **Final Audit** verifies the end result. When an audit or test fails, Bob automatically retries the failing stage with feedback from the previous attempt, creating a self-correcting development loop.
+The multi-agent workflow follows a rigorous pipeline: **Implementor** writes the code, an **Auditor** reviews the implementation, a **Test Writer** generates tests, a **Test Runner** executes them, and a **Final Audit** verifies the end result. When an audit or test fails, AgentBob automatically retries the failing stage with feedback from the previous attempt, creating a self-correcting development loop.
 
-The interactive TUI provides a three-pane layout: sub-agent output streams in the top-left, a chat and input area occupies the bottom-left, and a task list with planner visualization sits on the right. Bob supports dual backends — **OpenAI Codex CLI** and **Anthropic Claude CLI** — and is written entirely in Rust (~13k lines), delivering a native binary with zero runtime overhead and instant startup.
+The interactive TUI provides a three-pane layout: sub-agent output streams in the top-left, a chat and input area occupies the bottom-left, and a task list with planner visualization sits on the right. AgentBob supports dual backends — **OpenAI Codex CLI** and **Anthropic Claude CLI** — and is written entirely in Rust (~13k lines), delivering a native binary with zero runtime overhead and instant startup.
 
 ## Key Benefits
 
@@ -60,7 +60,7 @@ The interactive TUI provides a three-pane layout: sub-agent output streams in th
                                 Done ✓
 ```
 
-Bob includes a **collaborative planner mode** where you can interactively refine the task plan before execution. Use `/convert` to transform the planner markdown into a structured task list, then `/start` to kick off the agent pipeline.
+AgentBob includes a **collaborative planner mode** where you can interactively refine the task plan before execution. Use `/convert` to transform the planner markdown into a structured task list, then `/start` to kick off the agent pipeline.
 
 ## Quick Start
 
@@ -79,11 +79,11 @@ cd metaagent
 cargo build --release
 ```
 
-The binary will be at `target/release/bob`.
+The binary will be at `target/release/agentbob`.
 
 ### Configure
 
-Bob stores its configuration in `~/.bob/config.toml` (with legacy fallback to `~/.metaagent/config.toml`). A default config is created on first run. Key sections:
+AgentBob stores its configuration in `~/.agentbob/config.toml` (with legacy fallbacks to `~/.bob/config.toml` and `~/.metaagent/config.toml`). A default config is created on first run. Key sections:
 
 **Model profiles** control which model and thinking effort are used:
 
@@ -118,7 +118,7 @@ worker_final_audit = "large-smart"
 
 ### Usage
 
-1. **Launch** — Run `bob` in your project directory
+1. **Launch** — Run `agentbob` in your project directory
 2. **Describe your project** — The master planner creates a task graph
 3. **Review the plan** — Inspect and refine tasks in the planner view
 4. **Convert** — Type `/convert` to transform the plan into executable tasks
@@ -146,7 +146,7 @@ Pre-built binaries are available on the [GitHub Releases](https://github.com/ant
 cargo build --release
 ```
 
-The binary will be at `./target/release/bob`.
+The binary will be at `./target/release/agentbob`.
 
 ### Linux
 
@@ -173,7 +173,7 @@ cargo build --release --locked
 
 ## Configuration
 
-Bob merges an embedded default configuration (`src/default_config.toml`) with the user config at `~/.bob/config.toml` (with legacy fallback to `~/.metaagent/config.toml`). Missing keys are filled from defaults, so you only need to override what you want to change. The merged config is written back on every launch.
+AgentBob merges an embedded default configuration (`src/default_config.toml`) with the user config at `~/.agentbob/config.toml` (with legacy fallbacks to `~/.bob/config.toml` and `~/.metaagent/config.toml`). Missing keys are filled from defaults, so you only need to override what you want to change. The merged config is written back on every launch.
 
 ### Backend selection
 
@@ -250,7 +250,7 @@ TUI colors are customizable via a `theme.toml` file. See `src/theme.rs` for the 
 
 ## Commands Reference
 
-Bob's TUI provides 16 slash commands, organized by category:
+AgentBob's TUI provides 16 slash commands, organized by category:
 
 ### Planning
 
@@ -290,14 +290,14 @@ Bob's TUI provides 16 slash commands, organized by category:
 
 ## CLI API
 
-Bob exposes a JSON API via the CLI for scripting and automation.
+AgentBob exposes a JSON API via the CLI for scripting and automation.
 
 ### Output mode
 
 Pass `--output json` to get machine-readable JSON output:
 
 ```bash
-bob --output json api <resource> <action>
+agentbob --output json api <resource> <action>
 ```
 
 ### Resources

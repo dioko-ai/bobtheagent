@@ -1,5 +1,5 @@
 [package]
-name = "bob"
+name = "agentbob"
 version = "0.1.0"
 edition = "2024"
 
@@ -12,3 +12,7 @@ serde = { version = "1", features = ["derive"] }
 tui-markdown = "0.3.7"
 toml = "0.8"
 serde_json = "1"
+
+[[bin]]
+name = "bob"
+path = "src/main.rs"

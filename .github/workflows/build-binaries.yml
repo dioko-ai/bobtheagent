@@ -35,11 +35,15 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp target/release/bob dist/bob-${{ matrix.os }}
+          BIN_PATH="target/release/agentbob"
+          if [[ ! -x "$BIN_PATH" && -x "target/release/bob" ]]; then
+            BIN_PATH="target/release/bob"
+          fi
+          cp "$BIN_PATH" dist/agentbob-${{ matrix.os }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bob-${{ matrix.os }}
-          path: dist/bob-${{ matrix.os }}
+          name: agentbob-${{ matrix.os }}
+          path: dist/agentbob-${{ matrix.os }}
           if-no-files-found: error

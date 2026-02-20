@@ -2330,8 +2330,8 @@ fn mouse_left_click_scroll_button_scrolls_active_pane_down_by_half_page_in_narro
 }
 
 #[test]
-fn apply_backend_selection_persists_and_reports_success() {
-    with_temp_home("metaagent-backend-select-success", |_| {
+fn apply_backend_selection_persists_and_reports_agentbob_default_success_path() {
+    with_temp_home("metaagent-backend-select-success", |home| {
         let mut app = App::default();
         let mut selected_backend = BackendKind::Codex;
         let mut model_routing = CodexAgentModelRouting::default();
@@ -2398,6 +2398,80 @@ fn apply_backend_selection_persists_and_reports_success() {
         assert!(worker_agent_adapters.is_empty());
         let last = app.left_bottom_lines().last().expect("status message");
         assert!(last.contains("Backend set to Claude. Saved to"));
+        assert!(last.contains(&home.join(".agentbob/config.toml").display().to_string()));
+        assert!(last.contains("New adapters will use this backend."));
+    });
+}
+
+#[test]
+fn apply_backend_selection_persists_and_reports_metaagent_fallback_success_path() {
+    with_temp_home("metaagent-backend-select-success-legacy", |home| {
+        let legacy_config = home.join(".metaagent/config.toml");
+        std::fs::create_dir_all(legacy_config.parent().expect("legacy config parent"))
+            .expect("create legacy config dir");
+        std::fs::write(
+            &legacy_config,
+            r#"
+            [backend]
+            selected = "codex"
+            "#,
+        )
+        .expect("write legacy config");
+
+        let mut app = App::default();
+        let mut selected_backend = BackendKind::Codex;
+        let mut model_routing = CodexAgentModelRouting::default();
+        let mut master_adapter =
+            build_json_persistent_adapter(&model_routing, selected_backend, CodexAgentKind::Master);
+        let mut master_report_adapter = build_json_persistent_adapter(
+            &model_routing,
+            selected_backend,
+            CodexAgentKind::MasterReport,
+        );
+        let mut project_info_adapter = build_json_persistent_adapter(
+            &model_routing,
+            selected_backend,
+            CodexAgentKind::ProjectInfo,
+        );
+        let mut docs_attach_adapter = build_plain_adapter(
+            &model_routing,
+            selected_backend,
+            CodexAgentKind::DocsAttach,
+            false,
+        );
+        let mut task_check_adapter = build_plain_adapter(
+            &model_routing,
+            selected_backend,
+            CodexAgentKind::TaskCheck,
+            false,
+        );
+        let mut active_worker_context_key = Some("top:42".to_string());
+        let mut worker_agent_adapters: HashMap<String, CodexAdapter> =
+            [("top:42".to_string(), CodexAdapter::new())]
+                .into_iter()
+                .collect();
+
+        apply_backend_selection(
+            &mut app,
+            BackendOption {
+                kind: BackendKind::Claude,
+                label: "Claude",
+                description: "Anthropic Claude backend",
+            },
+            &mut selected_backend,
+            &mut model_routing,
+            &mut active_worker_context_key,
+            &mut worker_agent_adapters,
+            &mut master_adapter,
+            &mut master_report_adapter,
+            &mut project_info_adapter,
+            &mut docs_attach_adapter,
+            &mut task_check_adapter,
+        );
+
+        let last = app.left_bottom_lines().last().expect("status message");
+        assert!(last.contains("Backend set to Claude. Saved to"));
+        assert!(last.contains(&home.join(".metaagent/config.toml").display().to_string()));
         assert!(last.contains("New adapters will use this backend."));
     });
 }
@@ -2476,6 +2550,8 @@ fn apply_backend_selection_persist_failure_keeps_in_memory_backend_and_reports_f
         let last = app.left_bottom_lines().last().expect("status message");
         assert!(last.contains("Backend set to Claude for this run"));
         assert!(last.contains("persistence to config.toml failed"));
+        assert!(last.contains("legacy fallbacks"));
+        assert!(last.contains("~/.agentbob/config.toml"));
         assert!(last.contains("~/.bob/config.toml"));
         assert!(last.contains("~/.metaagent/config.toml"));
         assert!(last.contains("New adapters in this run will still use this backend."));

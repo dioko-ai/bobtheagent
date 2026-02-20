@@ -209,7 +209,7 @@ fn run_app(
         Ok(config) => config,
         Err(err) => {
             app.push_agent_message(format!(
-                "System: Failed to load model profile config from ~/.bob/config.toml (with legacy fallback): {err}. Using defaults."
+                "System: Failed to load model profile config from ~/.agentbob/config.toml (legacy fallbacks: ~/.bob/config.toml, ~/.metaagent/config.toml): {err}. Using defaults."
             ));
             CodexAgentModelRouting::default()
         }
@@ -2492,7 +2492,7 @@ fn apply_backend_selection(
             config_file.display()
         )),
         Err(err) => app.push_agent_message(format!(
-            "System: Backend set to {} for this run, but persistence to config.toml failed (default path is ~/.bob/config.toml with legacy fallback to ~/.metaagent/config.toml): {err}. New adapters in this run will still use this backend.",
+            "System: Backend set to {} for this run, but persistence to config.toml failed (default path is ~/.agentbob/config.toml; legacy fallbacks: ~/.bob/config.toml, ~/.metaagent/config.toml): {err}. New adapters in this run will still use this backend.",
             selected.label
         )),
     }
@@ -2821,7 +2821,6 @@ impl Default for CliOutputMode {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "bob")]
 struct LaunchCli {
     #[arg(long = "send-file", value_name = "PATH")]
     send_file: Option<PathBuf>,
@@ -4362,7 +4361,17 @@ fn parse_launch_options<I>(args: I) -> io::Result<LaunchOptions>
 where
     I: IntoIterator<Item = String>,
 {
-    let mut argv = vec!["bob".to_string()];
+    let program_name = std::env::args()
+        .next()
+        .and_then(|arg0| {
+            Path::new(&arg0)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(ToOwned::to_owned)
+        })
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "agentbob".to_string());
+    let mut argv = vec![program_name];
     argv.extend(args);
     let parsed = LaunchCli::try_parse_from(argv).map_err(|err| {
         if matches!(

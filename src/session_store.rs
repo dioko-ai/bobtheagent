@@ -33,7 +33,7 @@ impl Default for MetaAgentConfig {
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
-            root_dir: "~/.bob/sessions".to_string(),
+            root_dir: "~/.agentbob/sessions".to_string(),
         }
     }
 }

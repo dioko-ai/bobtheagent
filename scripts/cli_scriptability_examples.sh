@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BIN_PATH="${1:-target/debug/bob}"
+BIN_PATH="${1:-target/debug/agentbob}"
 
 if [[ ! -x "$BIN_PATH" ]]; then
   echo "Building binary at $BIN_PATH" >&2
   cargo build --quiet
+fi
+
+if [[ ! -x "$BIN_PATH" && -x "target/debug/bob" ]]; then
+  BIN_PATH="target/debug/bob"
 fi
 
 if command -v jq >/dev/null 2>&1; then
