@@ -1,13 +1,7 @@
-# MetaAgent
+# Bob The Agent
 
-```
- __  __      _            _                    _
-|  \/  | ___| |_ __ _   / \   __ _  ___ _ __ | |_
-| |\/| |/ _ \ __/ _` | / _ \ / _` |/ _ \ '_ \| __|
-| |  | |  __/ || (_| |/ ___ \ (_| |  __/ | | | |_
-|_|  |_|\___|\__\__,_/_/   \_\__, |\___|_| |_|\__|
-                              |___/
-```
+<img width="1024" height="1536" alt="bob-the-agent" src="https://github.com/user-attachments/assets/1d2563a3-316d-40ae-92a6-d9bd232fb517" />
+
 
 **A lightning-fast AI orchestrator that decomposes complex coding tasks into agent-driven workflows — built in Rust.**
 
