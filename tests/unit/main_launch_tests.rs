@@ -194,6 +194,16 @@ fn parse_launch_options_accepts_verbose_flag() {
 }
 
 #[test]
+fn keyboard_enhancement_flags_enable_modified_key_reporting() {
+    let flags = keyboard_enhancement_flags();
+    assert!(flags.contains(crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+    assert!(flags.contains(crossterm::event::KeyboardEnhancementFlags::REPORT_EVENT_TYPES));
+    assert!(flags.contains(
+        crossterm::event::KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+    ));
+}
+
+#[test]
 fn parse_launch_options_rejects_unknown_arg() {
     let err = parse_launch_options(vec!["--weird".to_string()]).expect_err("should fail");
     assert!(err.to_string().contains("Unknown argument"));

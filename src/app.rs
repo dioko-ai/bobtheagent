@@ -250,9 +250,42 @@ impl App {
         self.chat_cursor_goal_col = None;
     }
 
+    pub fn move_cursor_left_word(&mut self) {
+        if self.chat_cursor == 0 {
+            return;
+        }
+        let chars: Vec<char> = self.chat_input.chars().collect();
+        let mut cursor = self.chat_cursor;
+        while cursor > 0 && chars[cursor - 1].is_whitespace() {
+            cursor = cursor.saturating_sub(1);
+        }
+        while cursor > 0 && !chars[cursor - 1].is_whitespace() {
+            cursor = cursor.saturating_sub(1);
+        }
+        self.chat_cursor = cursor;
+        self.chat_cursor_goal_col = None;
+    }
+
     pub fn move_cursor_right(&mut self) {
         let char_len = self.chat_input.chars().count();
         self.chat_cursor = (self.chat_cursor + 1).min(char_len);
+        self.chat_cursor_goal_col = None;
+    }
+
+    pub fn move_cursor_right_word(&mut self) {
+        let chars: Vec<char> = self.chat_input.chars().collect();
+        let char_len = chars.len();
+        if self.chat_cursor >= char_len {
+            return;
+        }
+        let mut cursor = self.chat_cursor;
+        while cursor < char_len && !chars[cursor].is_whitespace() {
+            cursor += 1;
+        }
+        while cursor < char_len && chars[cursor].is_whitespace() {
+            cursor += 1;
+        }
+        self.chat_cursor = cursor;
         self.chat_cursor_goal_col = None;
     }
 

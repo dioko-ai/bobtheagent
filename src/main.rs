@@ -5,7 +5,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use crossterm::cursor::SetCursorStyle;
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use crossterm::event::{
+    DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -80,6 +83,13 @@ const PLANNER_AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(1_000);
 const PLANNER_PREFILL_INIT_PROMPT: &str = "Planner.md has been prefilled by user.";
 #[cfg(test)]
 type PendingTaskWriteBaseline = TaskWriteBaseline;
+
+fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+}
 
 fn apply_codex_profile(config: &mut CodexCommandConfig, profile: &CodexModelProfile) {
     if !matches!(config.backend_kind(), BackendKind::Codex) {
@@ -173,6 +183,11 @@ fn main() -> io::Result<()> {
         EnableMouseCapture,
         SetCursorStyle::SteadyBar
     )?;
+    let keyboard_enhancements_enabled = execute!(
+        stdout,
+        PushKeyboardEnhancementFlags(keyboard_enhancement_flags())
+    )
+    .is_ok();
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -187,6 +202,9 @@ fn main() -> io::Result<()> {
         startup_message.as_deref(),
     );
 
+    if keyboard_enhancements_enabled {
+        let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    }
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -1011,11 +1029,39 @@ fn run_app(
                     app.ensure_planner_cursor_visible(width, visible_lines, max_scroll);
                 }
             }
+            AppEvent::CursorLeftWord => {
+                if is_picker_open(&app) {
+                    // ignore cursor movement while a picker is open
+                } else if app.active_pane == Pane::LeftBottom {
+                    app.move_cursor_left_word();
+                } else if app.active_pane == Pane::Right && app.is_planner_mode() {
+                    let size = terminal.size()?;
+                    let screen = Rect::new(0, 0, size.width, size.height);
+                    let (width, visible_lines) = ui::planner_editor_metrics(screen);
+                    let max_scroll = ui::right_max_scroll(screen, &app);
+                    app.planner_move_cursor_left();
+                    app.ensure_planner_cursor_visible(width, visible_lines, max_scroll);
+                }
+            }
             AppEvent::CursorRight => {
                 if is_picker_open(&app) {
                     // ignore cursor movement while a picker is open
                 } else if app.active_pane == Pane::LeftBottom {
                     app.move_cursor_right();
+                } else if app.active_pane == Pane::Right && app.is_planner_mode() {
+                    let size = terminal.size()?;
+                    let screen = Rect::new(0, 0, size.width, size.height);
+                    let (width, visible_lines) = ui::planner_editor_metrics(screen);
+                    let max_scroll = ui::right_max_scroll(screen, &app);
+                    app.planner_move_cursor_right();
+                    app.ensure_planner_cursor_visible(width, visible_lines, max_scroll);
+                }
+            }
+            AppEvent::CursorRightWord => {
+                if is_picker_open(&app) {
+                    // ignore cursor movement while a picker is open
+                } else if app.active_pane == Pane::LeftBottom {
+                    app.move_cursor_right_word();
                 } else if app.active_pane == Pane::Right && app.is_planner_mode() {
                     let size = terminal.size()?;
                     let screen = Rect::new(0, 0, size.width, size.height);

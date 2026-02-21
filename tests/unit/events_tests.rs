@@ -113,8 +113,54 @@ fn maps_text_editing_keys() {
         AppEvent::Submit
     );
     assert_eq!(
+        map_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)),
+        AppEvent::InsertNewline
+    );
+    assert_eq!(
         map_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)),
         AppEvent::InsertNewline
+    );
+    assert_eq!(
+        map_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)),
+        AppEvent::InsertNewline
+    );
+    assert_eq!(
+        map_key_event(KeyEvent::new(KeyCode::Char('\n'), KeyModifiers::NONE)),
+        AppEvent::InsertNewline
+    );
+}
+
+#[test]
+fn maps_left_with_ctrl_or_alt_to_word_left() {
+    assert_eq!(
+        map_key_event(KeyEvent::new(
+            KeyCode::Left,
+            KeyModifiers::CONTROL
+        )),
+        AppEvent::CursorLeftWord
+    );
+    assert_eq!(
+        map_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT)),
+        AppEvent::CursorLeftWord
+    );
+    assert_eq!(
+        map_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT)),
+        AppEvent::CursorLeft
+    );
+    assert_eq!(
+        map_key_event(KeyEvent::new(
+            KeyCode::Right,
+            KeyModifiers::CONTROL
+        )),
+        AppEvent::CursorRightWord
+    );
+    assert_eq!(
+        map_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT)),
+        AppEvent::CursorRightWord
+    );
+    assert_eq!(
+        map_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT)),
+        AppEvent::CursorRight
     );
 }
 

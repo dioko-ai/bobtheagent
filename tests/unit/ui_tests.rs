@@ -151,6 +151,18 @@ fn render_shows_command_index_when_input_starts_with_slash() {
 }
 
 #[test]
+fn render_shows_chat_input_prefix_glyph() {
+    let mut app = App::default();
+    app.active_pane = Pane::LeftBottom;
+    app.input_char('h');
+    app.input_char('i');
+
+    let text = render_text(&app, 120, 30);
+    assert!(text.contains("▸ hi"));
+    assert!(text.contains("▸ "));
+}
+
+#[test]
 fn render_shows_resume_picker_overlay_when_open() {
     let mut app = App::default();
     app.open_resume_picker(vec![

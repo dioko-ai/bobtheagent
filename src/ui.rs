@@ -19,6 +19,7 @@ const TEXT_PADDING: u16 = 1;
 const STATUS_HEIGHT: u16 = 3;
 const TITLE_BAR_HEIGHT: u16 = 3;
 const TAB_BAR_HEIGHT: u16 = 3;
+const CHAT_INPUT_PREFIX: &str = "▸ ";
 const NARROW_SCREEN_WIDTH: u16 = 100;
 const ACTIVE_TITLE_BG: Color = Color::Rgb(90, 145, 200);
 const ACTIVE_TITLE_FG: Color = Color::Black;
@@ -29,6 +30,7 @@ const STATUS_HELP_TEXT_NARROW: &str =
 const STATUS_HELP_TEXT_WIDE: &str =
     "Tab/Shift+Tab focus | Ctrl+U/Ctrl+D or PgUp/PgDn scroll main right pane | Wheel scrolls focused pane";
 const SCROLL_BUTTON_WIDTH: u16 = 3;
+const CHAT_INPUT_PREFIX_WIDTH: u16 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScrollButton {
@@ -146,7 +148,14 @@ pub fn chat_input_text_width(screen: Rect) -> u16 {
     let [_title_bar, content] =
         Layout::vertical([Constraint::Length(TITLE_BAR_HEIGHT), Constraint::Min(0)])
             .areas(left_bottom);
-    content.width.saturating_sub(TEXT_PADDING * 2).max(1)
+    let content_width = content.width.saturating_sub(TEXT_PADDING * 2);
+    chat_input_text_width_inner(content_width)
+}
+
+fn chat_input_text_width_inner(content_width: u16) -> u16 {
+    content_width
+        .saturating_sub(CHAT_INPUT_PREFIX_WIDTH)
+        .max(1)
 }
 
 pub fn chat_max_scroll(screen: Rect, app: &App) -> u16 {
@@ -159,7 +168,7 @@ pub fn chat_max_scroll(screen: Rect, app: &App) -> u16 {
         return 0;
     }
 
-    let input_text_width = content.width.saturating_sub(TEXT_PADDING * 2).max(1);
+    let input_text_width = chat_input_text_width_inner(content.width.saturating_sub(TEXT_PADDING * 2));
     let input_text_lines = app.chat_input_line_count(input_text_width);
     let max_input_height = content.height.saturating_sub(1).max(1);
     let (input_height, _) = input_box_metrics(input_text_lines, 0, max_input_height);
@@ -259,7 +268,8 @@ pub fn pane_scroll_button_page_delta(screen: Rect, pane: Pane, app: &App) -> u16
             if content.width < 1 || content.height < 2 {
                 return 0;
             }
-            let input_text_width = content.width.saturating_sub(TEXT_PADDING * 2).max(1);
+            let input_text_width =
+                chat_input_text_width_inner(content.width.saturating_sub(TEXT_PADDING * 2));
             let input_text_lines = app.chat_input_line_count(input_text_width);
             let max_input_height = content.height.saturating_sub(1).max(1);
             let (input_height, _) = input_box_metrics(input_text_lines, 0, max_input_height);
@@ -581,7 +591,7 @@ fn render_chat_pane(frame: &mut Frame, area: Rect, app: &App, active: bool, them
         return;
     }
 
-    let input_text_width = content.width.saturating_sub(TEXT_PADDING * 2).max(1);
+    let input_text_width = chat_input_text_width_inner(content.width.saturating_sub(TEXT_PADDING * 2));
     let wrapped_input_layout = app.wrapped_chat_input_layout(input_text_width);
     let input_text_lines = wrapped_input_layout.line_count;
     let (cursor_line, cursor_col) = app.chat_cursor_line_col(input_text_width.max(1));
@@ -611,7 +621,7 @@ fn render_chat_pane(frame: &mut Frame, area: Rect, app: &App, active: bool, them
         );
     frame.render_widget(messages, messages_area);
 
-    let input = Paragraph::new(wrapped_input_layout.rendered.as_str())
+    let input = Paragraph::new(format!("{CHAT_INPUT_PREFIX}{}", wrapped_input_layout.rendered.as_str()))
         .block(
             Block::default()
                 .style(Style::default().bg(theme.input_bg))
@@ -638,10 +648,23 @@ fn render_chat_pane(frame: &mut Frame, area: Rect, app: &App, active: bool, them
         if input_inner.width > 0 && input_inner.height > 0 {
             let visible_cursor_line = cursor_line.saturating_sub(input_scroll);
             if visible_cursor_line < input_inner.height {
-                frame.set_cursor_position((
+                let text_col = if input_inner.width <= CHAT_INPUT_PREFIX_WIDTH {
+                    0
+                } else {
+                    cursor_col.min(input_inner.width.saturating_sub(CHAT_INPUT_PREFIX_WIDTH + 1))
+                };
+                let cursor_x = if input_inner.width <= CHAT_INPUT_PREFIX_WIDTH {
                     input_inner
                         .x
-                        .saturating_add(cursor_col.min(input_inner.width.saturating_sub(1))),
+                        .saturating_add(input_inner.width.saturating_sub(1))
+                } else {
+                    input_inner
+                        .x
+                        .saturating_add(CHAT_INPUT_PREFIX_WIDTH)
+                        .saturating_add(text_col)
+                };
+                frame.set_cursor_position((
+                    cursor_x,
                     input_inner.y.saturating_add(visible_cursor_line),
                 ));
             }

@@ -583,6 +583,50 @@ fn inserts_and_deletes_at_cursor_position() {
 }
 
 #[test]
+fn move_cursor_left_word_jumps_to_previous_word_start() {
+    let mut app = App::default();
+    for c in "hello world".chars() {
+        app.input_char(c);
+    }
+
+    assert_eq!(app.chat_cursor_line_col(200), (0, 11));
+    app.move_cursor_left_word();
+    assert_eq!(app.chat_cursor_line_col(200), (0, 6));
+
+    app.move_cursor_left();
+    app.move_cursor_left();
+    app.move_cursor_left();
+    assert_eq!(app.chat_cursor_line_col(200), (0, 3));
+    app.move_cursor_left_word();
+    assert_eq!(app.chat_cursor_line_col(200), (0, 0));
+
+    app.move_cursor_left_word();
+    assert_eq!(app.chat_cursor_line_col(200), (0, 0));
+}
+
+#[test]
+fn move_cursor_right_word_jumps_to_next_word_start() {
+    let mut app = App::default();
+    for c in "hello world again".chars() {
+        app.input_char(c);
+    }
+
+    for _ in 0..6 {
+        app.move_cursor_left();
+    }
+    assert_eq!(app.chat_cursor_line_col(200), (0, 11));
+
+    app.move_cursor_right_word();
+    assert_eq!(app.chat_cursor_line_col(200), (0, 12));
+
+    app.move_cursor_right_word();
+    assert_eq!(app.chat_cursor_line_col(200), (0, 17));
+
+    app.move_cursor_right_word();
+    assert_eq!(app.chat_cursor_line_col(200), (0, 17));
+}
+
+#[test]
 fn cursor_moves_up_and_down_over_wrapped_lines() {
     let mut app = App::default();
     for c in "abcdefghij".chars() {

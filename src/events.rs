@@ -28,7 +28,9 @@ pub enum AppEvent {
     MoveUp,
     MoveDown,
     CursorLeft,
+    CursorLeftWord,
     CursorRight,
+    CursorRightWord,
     ScrollChatUp,
     ScrollChatDown,
     ScrollRightUpGlobal,
@@ -77,13 +79,30 @@ fn map_key_event(key_event: KeyEvent) -> AppEvent {
         KeyCode::PageDown => AppEvent::ScrollRightDownGlobal,
         KeyCode::Up => AppEvent::MoveUp,
         KeyCode::Down => AppEvent::MoveDown,
+        KeyCode::Left
+            if key_event.modifiers.contains(KeyModifiers::CONTROL)
+                || key_event.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            AppEvent::CursorLeftWord
+        }
         KeyCode::Left => AppEvent::CursorLeft,
+        KeyCode::Right
+            if key_event.modifiers.contains(KeyModifiers::CONTROL)
+                || key_event.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            AppEvent::CursorRightWord
+        }
         KeyCode::Right => AppEvent::CursorRight,
         KeyCode::Backspace => AppEvent::Backspace,
-        KeyCode::Enter if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Enter
+            if key_event.modifiers.contains(KeyModifiers::SHIFT)
+                || key_event.modifiers.contains(KeyModifiers::CONTROL)
+                || key_event.modifiers.contains(KeyModifiers::ALT) =>
+        {
             AppEvent::InsertNewline
         }
         KeyCode::Enter => AppEvent::Submit,
+        KeyCode::Char('\n') | KeyCode::Char('\r') => AppEvent::InsertNewline,
         KeyCode::Char(c) => AppEvent::InputChar(c),
         _ => AppEvent::Tick,
     }
