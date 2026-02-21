@@ -77,6 +77,7 @@ const GLOBAL_RIGHT_SCROLL_LINES: u16 = 5;
 const MAX_ADAPTER_EVENTS_PER_LOOP: usize = 32;
 const UI_TICK_INTERVAL: Duration = Duration::from_millis(120);
 const PLANNER_AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(1_000);
+const PLANNER_PREFILL_INIT_PROMPT: &str = "Planner.md has been prefilled by user.";
 #[cfg(test)]
 type PendingTaskWriteBaseline = TaskWriteBaseline;
 
@@ -1119,6 +1120,21 @@ fn run_app(
                 } else if app.active_pane == Pane::LeftBottom {
                     app.input_char(c);
                 } else if app.active_pane == Pane::Right && app.is_planner_mode() {
+                    if session_store.is_none() {
+                        if let Err(err) = initialize_session_for_planner_edit_if_needed(
+                            &mut app,
+                            &cwd,
+                            &mut session_store,
+                            &mut project_info_text,
+                            &project_info_adapter,
+                            &master_adapter,
+                        ) {
+                            app.push_agent_message(format!(
+                                "System: Failed to initialize session for planner edit: {err}"
+                            ));
+                        }
+                    }
+
                     let size = terminal.size()?;
                     let screen = Rect::new(0, 0, size.width, size.height);
                     let (width, visible_lines) = ui::planner_editor_metrics(screen);
@@ -1159,6 +1175,21 @@ fn run_app(
                 } else if app.active_pane == Pane::LeftBottom {
                     app.backspace_input();
                 } else if app.active_pane == Pane::Right && app.is_planner_mode() {
+                    if session_store.is_none() {
+                        if let Err(err) = initialize_session_for_planner_edit_if_needed(
+                            &mut app,
+                            &cwd,
+                            &mut session_store,
+                            &mut project_info_text,
+                            &project_info_adapter,
+                            &master_adapter,
+                        ) {
+                            app.push_agent_message(format!(
+                                "System: Failed to initialize session for planner edit: {err}"
+                            ));
+                        }
+                    }
+
                     let size = terminal.size()?;
                     let screen = Rect::new(0, 0, size.width, size.height);
                     let (width, visible_lines) = ui::planner_editor_metrics(screen);
@@ -1219,6 +1250,21 @@ fn run_app(
                         );
                     }
                 } else if app.active_pane == Pane::Right && app.is_planner_mode() {
+                    if session_store.is_none() {
+                        if let Err(err) = initialize_session_for_planner_edit_if_needed(
+                            &mut app,
+                            &cwd,
+                            &mut session_store,
+                            &mut project_info_text,
+                            &project_info_adapter,
+                            &master_adapter,
+                        ) {
+                            app.push_agent_message(format!(
+                                "System: Failed to initialize session for planner edit: {err}"
+                            ));
+                        }
+                    }
+
                     let size = terminal.size()?;
                     let screen = Rect::new(0, 0, size.width, size.height);
                     let (width, visible_lines) = ui::planner_editor_metrics(screen);
@@ -1339,13 +1385,35 @@ fn run_app(
                         app.input_char(c);
                     }
                 } else if app.active_pane == Pane::Right && app.is_planner_mode() {
+                    let started_without_session = session_store.is_none();
+                    if started_without_session {
+                        if let Err(err) = initialize_session_for_planner_edit_if_needed(
+                            &mut app,
+                            &cwd,
+                            &mut session_store,
+                            &mut project_info_text,
+                            &project_info_adapter,
+                            &master_adapter,
+                        ) {
+                            app.push_agent_message(format!(
+                                "System: Failed to initialize session for planner edit: {err}"
+                            ));
+                        }
+                    }
+
                     let size = terminal.size()?;
                     let screen = Rect::new(0, 0, size.width, size.height);
                     let (width, visible_lines) = ui::planner_editor_metrics(screen);
                     app.planner_input_text(&content);
                     let max_scroll = ui::right_max_scroll(screen, &app);
                     app.ensure_planner_cursor_visible(width, visible_lines, max_scroll);
-                    match persist_planner_markdown_if_changed(&mut app, session_store.as_ref()) {
+                    if started_without_session {
+                        mark_planner_manual_edit(
+                            &mut planner_manual_edit_dirty,
+                            &mut planner_last_keystroke_at,
+                        );
+                    } else {
+                        match persist_planner_markdown_if_changed(&mut app, session_store.as_ref()) {
                         PlannerPersistResult::Persisted | PlannerPersistResult::Unchanged => {
                             planner_manual_edit_dirty = false;
                             planner_last_keystroke_at = None;
@@ -1356,6 +1424,7 @@ fn run_app(
                                 &mut planner_last_keystroke_at,
                             );
                         }
+                    }
                     }
                 }
             }
@@ -2708,6 +2777,31 @@ fn initialize_session_for_message_if_needed(
         .filter(|s| !s.is_empty());
     *session_store = Some(store);
     Ok(())
+}
+
+fn initialize_session_for_planner_edit_if_needed(
+    app: &mut App,
+    cwd: &Path,
+    session_store: &mut Option<SessionStore>,
+    project_info_text: &mut Option<String>,
+    project_info_adapter: &CodexAdapter,
+    master_adapter: &CodexAdapter,
+) -> io::Result<bool> {
+    if session_store.is_some() {
+        return Ok(false);
+    }
+
+    initialize_session_for_message_if_needed(
+        app,
+        "",
+        cwd,
+        session_store,
+        project_info_text,
+    )?;
+    let prompt = PLANNER_PREFILL_INIT_PROMPT.to_string();
+    project_info_adapter.send_prompt(prompt.clone());
+    master_adapter.send_prompt(prompt);
+    Ok(true)
 }
 
 fn is_allowed_during_task_check(message: &str) -> bool {

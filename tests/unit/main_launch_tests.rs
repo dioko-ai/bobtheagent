@@ -47,6 +47,21 @@ fn with_temp_home<T>(prefix: &str, f: impl FnOnce(&std::path::Path) -> T) -> T {
     }
 }
 
+fn wait_for_adapter_output(adapter: &CodexAdapter, expected: &str) -> bool {
+    let deadline = Instant::now() + Duration::from_millis(800);
+    while Instant::now() < deadline {
+        for event in adapter.drain_events() {
+            if let AgentEvent::Output(line) = event {
+                if line.trim() == expected {
+                    return true;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    false
+}
+
 fn integration_plan_with_final() -> Vec<PlannerTaskFileEntry> {
     vec![
         PlannerTaskFileEntry {
@@ -660,6 +675,137 @@ fn planner_typing_saves_after_debounce_from_most_recent_keystroke() {
     assert!(last_keystroke_at.is_none());
 
     std::fs::remove_dir_all(session_dir).ok();
+}
+
+#[test]
+fn planner_edit_before_session_initializes_and_notifies_adapters() {
+    with_temp_home("planner-edit-session-init-prompts", |_home| {
+        let prompt_script = "printf '%s\\n' \"$1\"";
+        let master_adapter = CodexAdapter::with_config(CodexCommandConfig {
+            program: "bash".to_string(),
+            args_prefix: vec![
+                "-lc".to_string(),
+                prompt_script.to_string(),
+                "planner-master".to_string(),
+            ],
+            output_mode: AdapterOutputMode::PlainText,
+            persistent_session: false,
+            skip_reader_join_after_wait: false,
+            model: None,
+            model_reasoning_effort: None,
+        });
+        let project_info_adapter = CodexAdapter::with_config(CodexCommandConfig {
+            program: "bash".to_string(),
+            args_prefix: vec![
+                "-lc".to_string(),
+                prompt_script.to_string(),
+                "planner-project-info".to_string(),
+            ],
+            output_mode: AdapterOutputMode::PlainText,
+            persistent_session: false,
+            skip_reader_join_after_wait: false,
+            model: None,
+            model_reasoning_effort: None,
+        });
+
+        let mut app = App::default();
+        let mut session_store = None;
+        let mut project_info_text = None;
+        let cwd = std::env::current_dir().expect("cwd");
+
+        initialize_session_for_planner_edit_if_needed(
+            &mut app,
+            &cwd,
+            &mut session_store,
+            &mut project_info_text,
+            &project_info_adapter,
+            &master_adapter,
+        )
+        .expect("initialize planner prefill session");
+
+        assert!(session_store.is_some(), "session should initialize from planner edit");
+        assert!(wait_for_adapter_output(
+            &master_adapter,
+            PLANNER_PREFILL_INIT_PROMPT
+        ));
+        assert!(wait_for_adapter_output(
+            &project_info_adapter,
+            PLANNER_PREFILL_INIT_PROMPT
+        ));
+    });
+}
+
+#[test]
+fn planner_edit_before_session_saves_via_debounce_after_initialization() {
+    with_temp_home("planner-edit-session-init-autosave", |_home| {
+        let master_adapter = CodexAdapter::with_config(CodexCommandConfig {
+            program: "bash".to_string(),
+            args_prefix: vec![
+                "-lc".to_string(),
+                "printf '%s\\n' \"$1\"".to_string(),
+                "planner-master".to_string(),
+            ],
+            output_mode: AdapterOutputMode::PlainText,
+            persistent_session: false,
+            skip_reader_join_after_wait: false,
+            model: None,
+            model_reasoning_effort: None,
+        });
+        let project_info_adapter = CodexAdapter::with_config(CodexCommandConfig {
+            program: "bash".to_string(),
+            args_prefix: vec![
+                "-lc".to_string(),
+                "printf '%s\\n' \"$1\"".to_string(),
+                "planner-project-info".to_string(),
+            ],
+            output_mode: AdapterOutputMode::PlainText,
+            persistent_session: false,
+            skip_reader_join_after_wait: false,
+            model: None,
+            model_reasoning_effort: None,
+        });
+
+        let mut app = App::default();
+        app.set_planner_markdown("".to_string());
+        let mut session_store = None;
+        let mut project_info_text = None;
+        let cwd = std::env::current_dir().expect("cwd");
+
+        initialize_session_for_planner_edit_if_needed(
+            &mut app,
+            &cwd,
+            &mut session_store,
+            &mut project_info_text,
+            &project_info_adapter,
+            &master_adapter,
+        )
+        .expect("initialize planner prefill session");
+
+        app.planner_input_text("typed draft");
+        let mut dirty = false;
+        let mut last_keystroke_at = Some(Instant::now());
+        mark_planner_manual_edit(&mut dirty, &mut last_keystroke_at);
+        last_keystroke_at = Instant::now()
+            .checked_sub(PLANNER_AUTOSAVE_DEBOUNCE + Duration::from_millis(5))
+            .or(last_keystroke_at);
+
+        flush_debounced_planner_autosave_if_due(
+            &mut app,
+            session_store.as_ref(),
+            &mut dirty,
+            &mut last_keystroke_at,
+        );
+
+        let store = session_store.expect("session should be initialized");
+        assert_eq!(
+            store
+                .read_planner_markdown()
+                .expect("read planner markdown after initialization save"),
+            "typed draft"
+        );
+        assert!(!dirty);
+        assert!(last_keystroke_at.is_none());
+    });
 }
 
 #[test]
