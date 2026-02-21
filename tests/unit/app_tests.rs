@@ -4,6 +4,20 @@ use crate::session_store::{PlannerTaskKindFile, PlannerTaskStatusFile};
 use crate::text_layout::wrap_word_with_positions;
 use std::sync::Arc;
 
+const REMOVED_TEST_DECISION_QUESTIONS: [&str; 5] = [
+    "Testing-decision flow before initial planning in a session:",
+    "If project info indicates tests are absent/unknown, ask user whether to set up a testing system first.",
+    "If tests exist, ask whether to write new tests as part of this work.",
+    "If tests exist, also ask whether to enforce existing tests (do not break) or ignore tests entirely.",
+    "If user testing choices are still missing, ask concise questions first and wait; do not write tasks.json yet.",
+];
+
+fn assert_prompt_omits_removed_test_decision_questions(prompt: &str) {
+    for removed in REMOVED_TEST_DECISION_QUESTIONS {
+        assert!(!prompt.contains(removed), "prompt should not contain: {removed}");
+    }
+}
+
 fn load_default_plan(app: &mut App, top_title: &str) {
     app.sync_planner_tasks_from_file(vec![
         PlannerTaskFileEntry {
@@ -109,6 +123,16 @@ fn master_modal_state_toggles() {
     assert!(app.is_master_in_progress());
     app.set_master_in_progress(false);
     assert!(!app.is_master_in_progress());
+}
+
+#[test]
+fn tests_mode_defaults_on_and_toggles() {
+    let mut app = App::default();
+    assert_eq!(app.toggle_tests_mode(), false);
+    assert_eq!(app.toggle_tests_mode(), true);
+
+    app.set_tests_mode_enabled(false);
+    assert_eq!(app.toggle_tests_mode(), true);
 }
 
 #[test]
@@ -325,8 +349,10 @@ fn queuing_task_updates_right_pane_and_prompts() {
     assert!(master_prompt.contains("`/start` is ready to run"));
     assert!(master_prompt.contains("`/start` always resumes from the last unfinished task"));
     assert!(master_prompt.contains("`docs` is reserved for `/attach-docs`"));
-    assert!(master_prompt.contains("Testing-decision flow before initial planning"));
-    assert!(master_prompt.contains("include test_runner under implementor"));
+    assert!(master_prompt.contains("Tests mode is ON. Test requirements are enabled for planning."));
+    assert!(master_prompt.contains(
+        "Include a direct implementor test_runner branch so existing-test failures report back to implementor."
+    ));
     assert!(
         master_prompt.contains("Every test_writer must be a direct child of the top-level task")
     );
@@ -356,6 +382,20 @@ fn queuing_task_updates_right_pane_and_prompts() {
 }
 
 #[test]
+fn master_prompt_in_tests_mode_off_keeps_testing_out_of_scope_without_questions() {
+    let mut app = App::default();
+    app.set_tests_mode_enabled(false);
+    load_default_plan(&mut app, "Add feature Y");
+
+    let master_prompt = app.prepare_master_prompt("Add feature Y", "/tmp/tasks.json");
+    assert!(master_prompt.contains("Tests mode is OFF. Testing is globally disabled for this planning run."));
+    assert!(master_prompt.contains("do not request, create, modify, or schedule any testing work"));
+    assert!(master_prompt.contains("Do not ask testing-decision questions; treat testing as explicitly out of scope."));
+    assert!(!master_prompt.contains("Tests mode is ON. Test requirements are enabled for planning."));
+    assert_prompt_omits_removed_test_decision_questions(&master_prompt);
+}
+
+#[test]
 fn planner_prompt_requires_clarification_and_convert_guidance() {
     let app = App::default();
     let prompt = app.prepare_planner_prompt(
@@ -371,7 +411,31 @@ fn planner_prompt_requires_clarification_and_convert_guidance() {
                 "For every step, include self-contained sections for Implementation, Auditing, and Test Writing"
             )
         );
+    assert!(prompt.contains("Every step must be self-contained for isolated-context execution."));
+    assert!(prompt.contains(
+        "In each step, require explicit details for: files/modules to touch, intended behavior/outcomes, constraints/non-goals, and verification approach (commands/checks)."
+    ));
+    assert!(prompt.contains("include an \"Isolated-context rationale\" sentence"));
     assert!(prompt.contains("run `/convert` to proceed to implementation"));
+}
+
+#[test]
+fn planner_prompt_in_tests_mode_off_keeps_isolated_context_requirements() {
+    let mut app = App::default();
+    app.set_tests_mode_enabled(false);
+    let prompt = app.prepare_planner_prompt(
+        "Plan this change",
+        "/tmp/session/planner.md",
+        "/tmp/session/project-info.md",
+    );
+    assert!(prompt.contains(
+        "For every step, include self-contained sections for Implementation and Auditing only."
+    ));
+    assert!(prompt.contains("Every step must be self-contained for isolated-context execution."));
+    assert!(prompt.contains("include an \"Isolated-context rationale\" sentence"));
+    assert!(!prompt.contains(
+        "For every step, include self-contained sections for Implementation, Auditing, and Test Writing."
+    ));
 }
 
 #[test]
@@ -437,6 +501,9 @@ fn start_command_detection_handles_aliases() {
     assert!(App::is_start_execution_command("start execution"));
     assert!(App::is_start_execution_command("/run"));
     assert!(!App::is_start_execution_command("please plan more"));
+    assert!(App::is_toggle_tests_command("/toggle-tests"));
+    assert!(App::is_toggle_tests_command("  /TOGGLE-TESTS  "));
+    assert!(!App::is_toggle_tests_command("/toggle-tests now"));
     assert!(App::is_attach_docs_command("/attach-docs"));
     assert!(!App::is_attach_docs_command("/start"));
     assert!(App::is_quit_command("/quit"));

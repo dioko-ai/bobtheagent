@@ -9,6 +9,11 @@ pub(crate) fn build_prompt(
     implementor_id: u64,
     feedback: Option<&str>,
 ) -> String {
+    let tests_policy = if workflow.tests_mode_enabled() {
+        "Tests mode policy (ON): preserve compatibility with existing tests; do not create or modify tests unless this task explicitly includes a direct implementor test_runner flow reporting failing existing tests."
+    } else {
+        "Tests mode policy (OFF): testing is disabled. Prohibition: do not create, modify, or delete tests under any circumstance."
+    };
     format!(
         "You are an implementation sub-agent.\n\
          Top-level task: {}\n\
@@ -16,7 +21,7 @@ pub(crate) fn build_prompt(
          Implementation details:\n{}\n\
          Rolling task context:\n{}\n\
          {}\n\
-         Guardrail: do not create or modify tests unless this task explicitly includes a direct implementor test_runner flow reporting failing existing tests.\n\
+         {}\n\
          End your response with a structured changed-files summary block using this exact format:\n\
          FILES_CHANGED_BEGIN\n\
          - path/to/file.ext: brief description of what changed\n\
@@ -30,7 +35,8 @@ pub(crate) fn build_prompt(
         feedback
             .as_ref()
             .map(|f| format!("Audit feedback to address:\n{f}"))
-            .unwrap_or_else(|| "No audit feedback yet; implement from task prompt.".to_string())
+            .unwrap_or_else(|| "No audit feedback yet; implement from task prompt.".to_string()),
+        tests_policy
     )
 }
 

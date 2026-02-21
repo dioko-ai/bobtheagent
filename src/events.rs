@@ -19,7 +19,7 @@ fn left_mouse_state() -> &'static Mutex<LeftMouseState> {
     LEFT_MOUSE_STATE.get_or_init(|| Mutex::new(LeftMouseState::default()))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppEvent {
     Tick,
     Quit,
@@ -34,6 +34,7 @@ pub enum AppEvent {
     ScrollRightUpGlobal,
     ScrollRightDownGlobal,
     InputChar(char),
+    Paste(String),
     Backspace,
     InsertNewline,
     Submit,
@@ -138,6 +139,9 @@ pub fn next_event() -> io::Result<AppEvent> {
         match event::read()? {
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                 return Ok(map_key_event(key_event));
+            }
+            Event::Paste(content) => {
+                return Ok(AppEvent::Paste(content));
             }
             Event::Mouse(mouse_event) => {
                 return Ok(map_mouse_event(mouse_event));

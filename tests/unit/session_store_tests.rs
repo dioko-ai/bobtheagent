@@ -115,6 +115,71 @@ fn initialize_preserves_metaagent_storage_fallback_when_legacy_config_exists() {
 }
 
 #[test]
+fn tests_mode_load_defaults_to_on_when_tests_section_missing() {
+    assert!(tests_mode_enabled_from_toml("").expect("empty config should default to on"));
+    assert!(
+        tests_mode_enabled_from_toml("[backend]\nselected = \"codex\"\n")
+            .expect("config without tests section should default to on")
+    );
+}
+
+#[test]
+fn tests_mode_load_parses_explicit_enabled_flag() {
+    assert!(
+        tests_mode_enabled_from_toml("[tests]\nenabled = true\n")
+            .expect("explicit true should parse")
+    );
+    assert!(
+        !tests_mode_enabled_from_toml("[tests]\nenabled = false\n")
+            .expect("explicit false should parse")
+    );
+}
+
+#[test]
+fn persist_tests_mode_updates_config_without_clobbering_other_sections() {
+    let updated = update_tests_mode_enabled_in_toml(
+        r#"
+        [backend]
+        selected = "claude"
+
+        [custom]
+        keep = true
+        "#,
+        false,
+    )
+    .expect("persist helper should update tests mode");
+    let parsed: toml::Value = toml::from_str(&updated).expect("updated config should parse");
+    let selected = parsed
+        .get("backend")
+        .and_then(|backend| backend.get("selected"))
+        .and_then(toml::Value::as_str);
+    let keep = parsed
+        .get("custom")
+        .and_then(|custom| custom.get("keep"))
+        .and_then(toml::Value::as_bool);
+    let tests_enabled = parsed
+        .get("tests")
+        .and_then(|tests| tests.get("enabled"))
+        .and_then(toml::Value::as_bool);
+    assert_eq!(selected, Some("claude"));
+    assert_eq!(keep, Some(true));
+    assert_eq!(tests_enabled, Some(false));
+}
+
+#[test]
+fn persist_and_load_tests_mode_retains_value_across_restart() {
+    with_temp_home("session-store-tests-mode-restart", |_home| {
+        let config_file =
+            persist_global_tests_mode_enabled(false).expect("persist tests mode false");
+        assert!(config_file.exists());
+        assert!(!load_global_tests_mode_enabled().expect("load persisted tests mode false"));
+
+        persist_global_tests_mode_enabled(true).expect("persist tests mode true");
+        assert!(load_global_tests_mode_enabled().expect("load persisted tests mode true"));
+    });
+}
+
+#[test]
 fn planner_task_status_defaults_to_pending() {
     let parsed: PlannerTaskFileEntry =
         serde_json::from_str("{\"id\":\"a\",\"title\":\"Task A\",\"parent_id\":null,\"order\":0}")

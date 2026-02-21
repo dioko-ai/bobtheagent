@@ -28,6 +28,16 @@ pub(crate) fn on_writer_completion(
         ));
         workflow.try_mark_top_done(top_task_id, messages);
     } else {
+        if super::ENFORCE_TESTS_MODE_RUNTIME_GATING && !workflow.tests_mode_enabled() {
+            workflow.set_status(test_runner_id, TaskStatus::Done);
+            workflow.set_status(test_writer_id, TaskStatus::Done);
+            messages.push(format!(
+                "System: Task #{} tests mode is OFF; skipping deterministic test-runner retries.",
+                top_task_id
+            ));
+            workflow.try_mark_top_done(top_task_id, messages);
+            return;
+        }
         workflow.set_status(test_writer_id, TaskStatus::NeedsChanges);
         if pass >= super::MAX_TEST_RETRIES {
             let failure_reason = test_runner_feedback(transcript, code);
@@ -110,6 +120,16 @@ pub(crate) fn on_implementor_completion(
             top_task_id, pass
         ));
     } else {
+        if super::ENFORCE_TESTS_MODE_RUNTIME_GATING && !workflow.tests_mode_enabled() {
+            workflow.set_status(test_runner_id, TaskStatus::Done);
+            workflow.set_status(implementor_id, TaskStatus::Done);
+            messages.push(format!(
+                "System: Task #{} tests mode is OFF; skipping existing-test runner retries.",
+                top_task_id
+            ));
+            workflow.try_mark_top_done(top_task_id, messages);
+            return;
+        }
         workflow.set_status(test_runner_id, TaskStatus::NeedsChanges);
         if pass >= super::MAX_TEST_RETRIES {
             workflow.set_status(test_runner_id, TaskStatus::Done);

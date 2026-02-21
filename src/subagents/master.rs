@@ -1,4 +1,38 @@
-pub(crate) fn build_master_prompt(tasks_file: &str, workflow_prompt: &str) -> String {
+pub(crate) fn build_master_prompt(
+    tasks_file: &str,
+    workflow_prompt: &str,
+    tests_mode_enabled: bool,
+) -> String {
+    let tests_policy = if tests_mode_enabled {
+        "- Tests mode is ON. Test requirements are enabled for planning.\n\
+         - Do not ask the user testing-decision questions; apply defaults automatically.\n\
+         - Default testing decisions in this mode:\n\
+           Write new tests for relevant behavior/code changes.\n\
+           Enforce existing tests (do not break them).\n\
+           If tests are absent/unknown, add a dedicated testing-setup top-level task before dependent feature work.\n\
+         - Use task structure based on these defaults:\n\
+           Always include implementor under each top-level task.\n\
+           Every implementor must include at least one auditor subtask.\n\
+           Implementor scope should avoid test-writing/modification unless tied to a direct implementor test_runner branch for existing-test verification.\n\
+           Implementor auditors must not include test-related checks; test concerns belong only to test_runner/test_writer branches.\n\
+           Include a direct implementor test_runner branch so existing-test failures report back to implementor.\n\
+           Include test_writer branch for top-level tasks that change behavior/code.\n\
+           Every test_writer must be a direct child of the top-level task (no nested/umbrella test_writer grouping tasks).\n\
+           If implementor has a test_runner, order it after implementor audit subtasks.\n\
+           Every test_writer must include at least one test_runner subtask.\n\
+           For tests-absent/unknown projects, create testing setup first:\n\
+           Create a dedicated testing-setup top-level task at the earliest position (before feature work that depends on tests).\n\
+           That setup task must include an implementor + auditor flow where implementor sets up the test framework/tooling and updates session meta.json test_command to the exact bash-runnable command string.\n\
+           Do not add non-setup test_writer or test_runner branches until after that setup task in task order."
+            .to_string()
+    } else {
+        "- Tests mode is OFF. Testing is globally disabled for this planning run.\n\
+         - Prohibition: do not request, create, modify, or schedule any testing work.\n\
+         - Do not create or update test_writer/test_runner tasks.\n\
+         - Do not ask testing-decision questions; treat testing as explicitly out of scope.\n\
+         - Keep implementor and auditor tasks focused on non-test implementation concerns only."
+            .to_string()
+    };
     format!(
         "{}\n\
          Planner storage:\n\
@@ -13,31 +47,15 @@ pub(crate) fn build_master_prompt(tasks_file: &str, workflow_prompt: &str) -> St
          - `docs` is reserved for `/attach-docs`. Do not populate or modify `docs` in master edits.\n\
          - For new tasks created by master, set `docs` to [] and leave it empty.\n\
          - Every task and sub-task must include a non-empty details field with concrete implementation/audit/test intent.\n\
-         - Testing-decision flow before initial planning in a session:\n\
-           If project info indicates tests are absent/unknown, ask user whether to set up a testing system first.\n\
-           If tests exist, ask whether to write new tests as part of this work.\n\
-           If tests exist, also ask whether to enforce existing tests (do not break) or ignore tests entirely.\n\
-         - Use task structure based on user testing choices:\n\
-           Always include implementor under each top-level task.\n\
-           Every implementor must include at least one auditor subtask.\n\
-           Implementor scope should avoid test-writing/modification unless tied to a direct implementor test_runner branch for existing-test verification.\n\
-           Implementor auditors must not include test-related checks; test concerns belong only to test_runner/test_writer branches.\n\
-           Include test_writer branch only when user wants new tests written.\n\
-           Every test_writer must be a direct child of the top-level task (no nested/umbrella test_writer grouping tasks).\n\
-           If user wants existing tests enforced, include test_runner under implementor so failures report back to implementor.\n\
-           If implementor has a test_runner, order it after implementor audit subtasks.\n\
-           Every test_writer must include at least one test_runner subtask.\n\
-           If user chooses to ignore tests, omit test_writer and implementor test_runner branches.\n\
-           Special case when tests are absent/unknown and user wants tests:\n\
-           Create a dedicated testing-setup top-level task at the earliest position (before feature work that depends on tests).\n\
-           That setup task must include an implementor + auditor flow where implementor sets up the test framework/tooling and updates session meta.json test_command to the exact bash-runnable command string.\n\
-           Do not add non-setup test_writer or test_runner branches until after that setup task in task order.\n\
-         - If user testing choices are still missing, ask concise questions first and wait; do not write tasks.json yet.\n\
+         - Every details field must be self-contained for isolated-context execution and explicitly cover: target files/modules, expected behavior changes, constraints/non-goals, and verification approach.\n\
+         - Every details field must include an explicit isolated-context rationale stating why the assigned sub-agent can execute using only the task record and referenced artifacts, without hidden chat context.\n\
+         {}\n\
          - Update tasks.json only when task state should change.\n\
          - Conversational answers that do not change task state do not require tasks.json edits.\n\
          - Do not ask the user to start execution until task updates are ready.\n\
          - After updating tasks.json, explain to the user what changed.",
-        workflow_prompt
+        workflow_prompt,
+        tests_policy
     )
 }
 
@@ -131,6 +149,7 @@ pub(crate) fn split_audits_command_prompt() -> String {
     "Update tasks.json now by splitting audit tasks into more granular audit tasks mapped per concern.\n\
      Concern examples to map across relevant work: correctness, edge cases, tests/coverage, security, performance, and UX.\n\
      Keep task hierarchy coherent and preserve non-audit task intent/status where possible.\n\
+     For each audit task you create/update, ensure details are self-contained and include files/modules, behavior expectations, constraints/non-goals, verification approach, and an explicit isolated-context rationale.\n\
      Do not populate or modify docs fields; docs are reserved for /attach-docs.\n\
      After updating tasks.json, provide a concise user-facing summary."
         .to_string()
@@ -139,11 +158,14 @@ pub(crate) fn split_audits_command_prompt() -> String {
 pub(crate) fn merge_audits_command_prompt() -> String {
     "Update tasks.json now by merging overly granular audit tasks back into a simpler audit structure for each implementation branch.\n\
      Keep task hierarchy coherent and preserve non-audit task intent/status where possible.\n\
+     For each merged audit task, keep details self-contained with files/modules, behavior expectations, constraints/non-goals, verification approach, and an explicit isolated-context rationale.\n\
      Do not populate or modify docs fields; docs are reserved for /attach-docs.\n\
      After updating tasks.json, provide a concise user-facing summary."
         .to_string()
 }
 
+#[cfg(test)]
+#[cfg(test)]
 pub(crate) fn split_tests_command_prompt() -> String {
     "Update tasks.json now by splitting test_writer tasks into more granular test tasks mapped per concern.\n\
      Concern examples to map across relevant work: core behavior, edge cases, regression paths, error handling, and integration paths.\n\
@@ -151,15 +173,23 @@ pub(crate) fn split_tests_command_prompt() -> String {
      Use flat test-writer structure only: each test_writer must be a direct child of the top-level task.\n\
      Do not create umbrella/nested test_writer parent groups.\n\
      Ensure every test_writer has at least one direct test_runner child.\n\
+     For each test task you create/update, ensure details are self-contained and include files/modules, behavior expectations, constraints/non-goals, verification approach, and an explicit isolated-context rationale.\n\
      Do not populate or modify docs fields; docs are reserved for /attach-docs.\n\
      After updating tasks.json, provide a concise user-facing summary."
         .to_string()
 }
 
+#[cfg(test)]
+#[cfg(test)]
 pub(crate) fn merge_tests_command_prompt() -> String {
     "Update tasks.json now by merging overly granular test_writer tasks back into a simpler test structure for each implementation branch.\n\
      Keep task hierarchy coherent and preserve non-test task intent/status where possible.\n\
+     For each merged test task, keep details self-contained with files/modules, behavior expectations, constraints/non-goals, verification approach, and an explicit isolated-context rationale.\n\
      Do not populate or modify docs fields; docs are reserved for /attach-docs.\n\
      After updating tasks.json, provide a concise user-facing summary."
         .to_string()
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/subagents_master_tests.rs"]
+mod tests;

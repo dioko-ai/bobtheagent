@@ -325,6 +325,57 @@ impl SessionStore {
     }
 }
 
+pub fn load_global_tests_mode_enabled() -> io::Result<bool> {
+    let config_file = ensure_default_metaagent_config()?;
+    let text = read_text_file(&config_file)?;
+    tests_mode_enabled_from_toml(&text)
+}
+
+pub fn persist_global_tests_mode_enabled(enabled: bool) -> io::Result<PathBuf> {
+    let config_file = ensure_default_metaagent_config()?;
+    let existing = read_text_file(&config_file).unwrap_or_default();
+    let updated = update_tests_mode_enabled_in_toml(&existing, enabled)?;
+    write_text_file(&config_file, &updated)?;
+    Ok(config_file)
+}
+
+fn tests_mode_enabled_from_toml(text: &str) -> io::Result<bool> {
+    let parsed = toml::from_str::<toml::Value>(text)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    Ok(parsed
+        .get("tests")
+        .and_then(toml::Value::as_table)
+        .and_then(|table| table.get("enabled"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(true))
+}
+
+fn update_tests_mode_enabled_in_toml(text: &str, enabled: bool) -> io::Result<String> {
+    let mut value = if text.trim().is_empty() {
+        toml::Value::Table(toml::map::Map::new())
+    } else {
+        toml::from_str::<toml::Value>(text)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
+    };
+    let Some(table) = value.as_table_mut() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "config root is not a TOML table",
+        ));
+    };
+    let tests = table
+        .entry("tests")
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    let Some(tests_table) = tests.as_table_mut() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "tests section is not a TOML table",
+        ));
+    };
+    tests_table.insert("enabled".to_string(), toml::Value::Boolean(enabled));
+    toml::to_string_pretty(&value).map_err(io::Error::other)
+}
+
 fn create_unique_session_dir(
     root_dir: &Path,
     now_secs: u64,

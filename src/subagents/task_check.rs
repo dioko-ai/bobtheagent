@@ -12,6 +12,11 @@ pub(crate) fn build_task_check_prompt(
          - If issues are found, edit this tasks.json directly to fix them.\n\
          - Keep task intent/status/order as stable as possible while fixing structure.\n\
          - Validate task hierarchy and ordering against execution guardrails.\n\
+         - Enforce self-contained details for isolated-context execution on every task/subtask:\n\
+           details must explicitly cover files/modules, behavior/outcomes, constraints/non-goals, and verification approach.\n\
+         - Enforce explicit isolated-context rationale on every task/subtask:\n\
+           details must explain why execution is possible from task artifacts alone (without hidden chat memory).\n\
+         - If any task details are missing these fields, fix details text directly while preserving intent/status/order.\n\
          - Enforce test-task shape deterministically: each test_writer must be a direct child of a top-level task (no nested test_writer groups).\n\
          - Focus especially on implementor/auditor/test-runner and test-writer/test-runner relationships.\n\
          - Enforce special-case sequencing for test bootstrapping:\n\

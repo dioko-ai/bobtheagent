@@ -189,6 +189,26 @@ fn codex_resume_prompt_args_keep_exec_resume_parity() {
 }
 
 #[test]
+fn global_skills_preamble_is_prepended_for_codex_programs() {
+    let prompt = apply_global_prompt_preamble("Implement feature X".to_string(), "codex");
+    assert!(prompt.contains("GLOBAL SKILLS POLICY (HARD REQUIREMENT)"));
+    assert!(prompt.contains("Skills are disabled for this run."));
+    assert!(prompt.ends_with("Implement feature X"));
+}
+
+#[test]
+fn global_skills_preamble_is_not_prepended_for_non_codex_programs() {
+    let prompt = apply_global_prompt_preamble("Implement feature X".to_string(), "bash");
+    assert_eq!(prompt, "Implement feature X");
+}
+
+#[test]
+fn global_skills_preamble_is_not_prepended_for_claude_programs() {
+    let prompt = apply_global_prompt_preamble("Implement feature X".to_string(), "claude");
+    assert_eq!(prompt, "Implement feature X");
+}
+
+#[test]
 fn claude_new_session_args_include_prompt_and_json_flags() {
     let mut config = CodexCommandConfig::default_for_backend(BackendKind::Claude);
     config.output_mode = AdapterOutputMode::JsonAssistantOnly;

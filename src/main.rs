@@ -42,7 +42,8 @@ use services::{
 };
 use session_store::{
     PlannerTaskFileEntry, PlannerTaskKindFile, PlannerTaskStatusFile, SessionListEntry,
-    SessionStore, TaskFailFileEntry,
+    SessionStore, TaskFailFileEntry, load_global_tests_mode_enabled,
+    persist_global_tests_mode_enabled,
 };
 use theme::Theme;
 #[cfg(test)]
@@ -58,7 +59,9 @@ enum ProjectInfoStage {
 enum SilentMasterCommand {
     SplitAudits,
     MergeAudits,
+    #[cfg(test)]
     SplitTests,
+    #[cfg(test)]
     MergeTests,
 }
 
@@ -73,6 +76,7 @@ enum SubmitBlockReason {
 const GLOBAL_RIGHT_SCROLL_LINES: u16 = 5;
 const MAX_ADAPTER_EVENTS_PER_LOOP: usize = 32;
 const UI_TICK_INTERVAL: Duration = Duration::from_millis(120);
+const PLANNER_AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(1_000);
 #[cfg(test)]
 type PendingTaskWriteBaseline = TaskWriteBaseline;
 
@@ -258,6 +262,16 @@ fn run_app(
     let mut project_info_in_flight = false;
     let mut project_info_stage: Option<ProjectInfoStage> = None;
     let mut project_info_text: Option<String> = None;
+    let tests_mode_enabled = match load_global_tests_mode_enabled() {
+        Ok(enabled) => enabled,
+        Err(err) => {
+            app.push_agent_message(format!(
+                "System: Failed to load global tests mode from config.toml; defaulting to ON: {err}"
+            ));
+            true
+        }
+    };
+    app.set_tests_mode_enabled(tests_mode_enabled);
     app.push_agent_message("Agent: What can I help you build?".to_string());
 
     if let Some(message) = startup_message
@@ -296,6 +310,8 @@ fn run_app(
 
     let mut needs_draw = true;
     let mut last_ui_tick = Instant::now();
+    let mut planner_manual_edit_dirty = false;
+    let mut planner_last_keystroke_at: Option<Instant> = None;
     while app.running {
         let input_pending = events::has_pending_input()?;
         let mut chat_updated = false;
@@ -891,16 +907,22 @@ fn run_app(
         }
 
         let mut app_event = events::next_event()?;
-        if matches!(app_event, AppEvent::InsertNewline)
+        if matches!(&app_event, AppEvent::InsertNewline)
             && (app.active_pane != Pane::LeftBottom || is_picker_open(&app))
         {
             app_event = AppEvent::Submit;
         }
-        if !matches!(app_event, AppEvent::Tick) {
+        if !matches!(&app_event, AppEvent::Tick) {
             needs_draw = true;
         }
         match app_event {
             AppEvent::Tick => {
+                flush_debounced_planner_autosave_if_due(
+                    &mut app,
+                    session_store.as_ref(),
+                    &mut planner_manual_edit_dirty,
+                    &mut planner_last_keystroke_at,
+                );
                 if last_ui_tick.elapsed() >= UI_TICK_INTERVAL {
                     app.on_tick();
                     last_ui_tick = Instant::now();
@@ -1103,7 +1125,10 @@ fn run_app(
                     app.planner_input_char(c);
                     let max_scroll = ui::right_max_scroll(screen, &app);
                     app.ensure_planner_cursor_visible(width, visible_lines, max_scroll);
-                    persist_planner_markdown_if_possible(&mut app, session_store.as_ref());
+                    mark_planner_manual_edit(
+                        &mut planner_manual_edit_dirty,
+                        &mut planner_last_keystroke_at,
+                    );
                 } else if c == 'j' {
                     if app.active_pane == Pane::Right {
                         let size = terminal.size()?;
@@ -1140,7 +1165,10 @@ fn run_app(
                     app.planner_backspace();
                     let max_scroll = ui::right_max_scroll(screen, &app);
                     app.ensure_planner_cursor_visible(width, visible_lines, max_scroll);
-                    persist_planner_markdown_if_possible(&mut app, session_store.as_ref());
+                    mark_planner_manual_edit(
+                        &mut planner_manual_edit_dirty,
+                        &mut planner_last_keystroke_at,
+                    );
                 }
             }
             AppEvent::InsertNewline => {
@@ -1197,7 +1225,10 @@ fn run_app(
                     app.planner_insert_newline();
                     let max_scroll = ui::right_max_scroll(screen, &app);
                     app.ensure_planner_cursor_visible(width, visible_lines, max_scroll);
-                    persist_planner_markdown_if_possible(&mut app, session_store.as_ref());
+                    mark_planner_manual_edit(
+                        &mut planner_manual_edit_dirty,
+                        &mut planner_last_keystroke_at,
+                    );
                 } else if app.active_pane == Pane::LeftBottom {
                     let pending = app.chat_input().trim().to_string();
                     match submit_block_reason(
@@ -1299,6 +1330,32 @@ fn run_app(
                             &mut model_routing,
                             &mut selected_backend,
                         )?;
+                    }
+                }
+            }
+            AppEvent::Paste(content) => {
+                if app.active_pane == Pane::LeftBottom {
+                    for c in content.chars() {
+                        app.input_char(c);
+                    }
+                } else if app.active_pane == Pane::Right && app.is_planner_mode() {
+                    let size = terminal.size()?;
+                    let screen = Rect::new(0, 0, size.width, size.height);
+                    let (width, visible_lines) = ui::planner_editor_metrics(screen);
+                    app.planner_input_text(&content);
+                    let max_scroll = ui::right_max_scroll(screen, &app);
+                    app.ensure_planner_cursor_visible(width, visible_lines, max_scroll);
+                    match persist_planner_markdown_if_changed(&mut app, session_store.as_ref()) {
+                        PlannerPersistResult::Persisted | PlannerPersistResult::Unchanged => {
+                            planner_manual_edit_dirty = false;
+                            planner_last_keystroke_at = None;
+                        }
+                        PlannerPersistResult::Deferred => {
+                            mark_planner_manual_edit(
+                                &mut planner_manual_edit_dirty,
+                                &mut planner_last_keystroke_at,
+                            );
+                        }
                     }
                 }
             }
@@ -1579,6 +1636,26 @@ fn submit_user_message_with_runtime<B: Backend>(
         return Ok(());
     }
 
+    if App::is_toggle_tests_command(&message) {
+        let enabled = app.toggle_tests_mode();
+        match persist_global_tests_mode_enabled(enabled) {
+            Ok(config_file) => app.push_agent_message(format!(
+                "System: Tests mode is now {}. Saved to {}.",
+                if enabled { "ON" } else { "OFF" },
+                config_file.display()
+            )),
+            Err(err) => app.push_agent_message(format!(
+                "System: Tests mode is now {} for this run, but persistence to config.toml failed (default path is ~/.agentbob/config.toml; legacy fallbacks: ~/.bob/config.toml, ~/.metaagent/config.toml): {err}.",
+                if enabled { "ON" } else { "OFF" }
+            )),
+        }
+        let size = terminal.size()?;
+        let screen = Rect::new(0, 0, size.width, size.height);
+        let max_scroll = ui::chat_max_scroll(screen, app);
+        app.set_chat_scroll(max_scroll);
+        return Ok(());
+    }
+
     if App::is_planner_mode_command(&message) {
         let active_session = session_store
             .as_ref()
@@ -1625,6 +1702,21 @@ fn submit_user_message_with_runtime<B: Backend>(
             let max_scroll = ui::chat_max_scroll(screen, app);
             app.set_chat_scroll(max_scroll);
             return Ok(());
+        }
+
+        match persist_planner_markdown_if_changed(app, Some(active_session)) {
+            PlannerPersistResult::Persisted | PlannerPersistResult::Unchanged => {}
+            PlannerPersistResult::Deferred => {
+                app.push_agent_message(
+                    "System: Could not persist planner.md before /convert; conversion aborted."
+                        .to_string(),
+                );
+                let size = terminal.size()?;
+                let screen = Rect::new(0, 0, size.width, size.height);
+                let max_scroll = ui::chat_max_scroll(screen, app);
+                app.set_chat_scroll(max_scroll);
+                return Ok(());
+            }
         }
 
         app.set_right_pane_mode(RightPaneMode::TaskList);
@@ -2205,14 +2297,61 @@ fn claim_next_worker_job_and_persist_snapshot(
     job
 }
 
-fn persist_planner_markdown_if_possible(app: &mut App, session_store: Option<&SessionStore>) {
+enum PlannerPersistResult {
+    Persisted,
+    Unchanged,
+    Deferred,
+}
+
+fn persist_planner_markdown_if_changed(
+    app: &mut App,
+    session_store: Option<&SessionStore>,
+) -> PlannerPersistResult {
     let Some(session_store) = session_store else {
-        return;
+        return PlannerPersistResult::Deferred;
     };
+    if let Ok(existing) = session_store.read_planner_markdown()
+        && existing == app.planner_markdown()
+    {
+        return PlannerPersistResult::Unchanged;
+    }
     if let Err(err) = session_store.write_planner_markdown(app.planner_markdown()) {
         app.push_agent_message(format!(
             "System: Failed to write planner markdown to planner.md: {err}"
         ));
+        return PlannerPersistResult::Deferred;
+    }
+    PlannerPersistResult::Persisted
+}
+
+fn mark_planner_manual_edit(dirty: &mut bool, last_keystroke_at: &mut Option<Instant>) {
+    *dirty = true;
+    *last_keystroke_at = Some(Instant::now());
+}
+
+fn flush_debounced_planner_autosave_if_due(
+    app: &mut App,
+    session_store: Option<&SessionStore>,
+    dirty: &mut bool,
+    last_keystroke_at: &mut Option<Instant>,
+) {
+    if !*dirty {
+        return;
+    }
+    let Some(last_input) = *last_keystroke_at else {
+        return;
+    };
+    if last_input.elapsed() < PLANNER_AUTOSAVE_DEBOUNCE {
+        return;
+    }
+    match persist_planner_markdown_if_changed(app, session_store) {
+        PlannerPersistResult::Persisted | PlannerPersistResult::Unchanged => {
+            *dirty = false;
+            *last_keystroke_at = None;
+        }
+        PlannerPersistResult::Deferred => {
+            *last_keystroke_at = Some(Instant::now());
+        }
     }
 }
 
@@ -2599,6 +2738,9 @@ fn submit_block_reason(
     if is_backend_command(message) {
         return None;
     }
+    if App::is_toggle_tests_command(message) {
+        return None;
+    }
     if project_info_in_flight {
         return Some(SubmitBlockReason::ProjectInfoGathering);
     }
@@ -2681,11 +2823,14 @@ fn parse_silent_master_command(message: &str) -> Option<SilentMasterCommand> {
     if App::is_merge_audits_command(message) {
         return Some(SilentMasterCommand::MergeAudits);
     }
-    if App::is_split_tests_command(message) {
-        return Some(SilentMasterCommand::SplitTests);
-    }
-    if App::is_merge_tests_command(message) {
-        return Some(SilentMasterCommand::MergeTests);
+    #[cfg(test)]
+    {
+        if App::is_split_tests_command(message) {
+            return Some(SilentMasterCommand::SplitTests);
+        }
+        if App::is_merge_tests_command(message) {
+            return Some(SilentMasterCommand::MergeTests);
+        }
     }
     None
 }
@@ -2715,14 +2860,8 @@ fn handle_silent_master_command<B: Backend>(
             "System: Merging audits...".to_string(),
             subagents::merge_audits_command_prompt(),
         ),
-        SilentMasterCommand::SplitTests => (
-            "System: Splitting tests...".to_string(),
-            subagents::split_tests_command_prompt(),
-        ),
-        SilentMasterCommand::MergeTests => (
-            "System: Merging tests...".to_string(),
-            subagents::merge_tests_command_prompt(),
-        ),
+        #[cfg(test)]
+        SilentMasterCommand::SplitTests | SilentMasterCommand::MergeTests => return Ok(false),
     };
 
     app.push_agent_message(status_message);
@@ -2764,6 +2903,7 @@ fn is_known_slash_command(message: &str) -> bool {
     }
     App::is_start_execution_command(trimmed)
         || is_backend_command(trimmed)
+        || App::is_toggle_tests_command(trimmed)
         || App::is_planner_mode_command(trimmed)
         || App::is_skip_plan_command(trimmed)
         || App::is_convert_command(trimmed)
@@ -2773,8 +2913,6 @@ fn is_known_slash_command(message: &str) -> bool {
         || App::is_resume_command(trimmed)
         || App::is_split_audits_command(trimmed)
         || App::is_merge_audits_command(trimmed)
-        || App::is_split_tests_command(trimmed)
-        || App::is_merge_tests_command(trimmed)
         || App::is_add_final_audit_command(trimmed)
         || App::is_remove_final_audit_command(trimmed)
 }

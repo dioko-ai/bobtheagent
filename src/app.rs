@@ -8,9 +8,29 @@ use crate::subagents;
 use crate::text_layout::{WrappedText, wrap_word_with_positions};
 use crate::workflow::{RightPaneBlockView, StartedJob, WorkerRole, Workflow, WorkflowFailure};
 
-const COMMAND_INDEX: [(&str, &str); 16] = [
+#[cfg(not(test))]
+const COMMAND_INDEX: [(&str, &str); 15] = [
     ("/start", "Start execution"),
     ("/backend", "Choose backend"),
+    ("/toggle-tests", "Toggle global tests mode"),
+    ("/planner", "Show collaborative planner markdown"),
+    ("/convert", "Convert planner markdown to tasks"),
+    ("/skip-plan", "Show task list view"),
+    ("/quit", "Quit app"),
+    ("/exit", "Quit app"),
+    ("/attach-docs", "Attach docs to tasks"),
+    ("/newmaster", "Start a new master session"),
+    ("/resume", "Resume a prior session"),
+    ("/split-audits", "Split audits per concern"),
+    ("/merge-audits", "Merge audits"),
+    ("/add-final-audit", "Add final audit task"),
+    ("/remove-final-audit", "Remove final audit task"),
+];
+#[cfg(test)]
+const COMMAND_INDEX: [(&str, &str); 17] = [
+    ("/start", "Start execution"),
+    ("/backend", "Choose backend"),
+    ("/toggle-tests", "Toggle global tests mode"),
     ("/planner", "Show collaborative planner markdown"),
     ("/convert", "Convert planner markdown to tasks"),
     ("/skip-plan", "Show task list view"),
@@ -116,6 +136,7 @@ pub struct App {
     expanded_detail_keys: HashSet<String>,
     resume_picker: Option<ResumePickerState>,
     backend_picker: Option<BackendPickerState>,
+    tests_mode_enabled: bool,
     task_check_in_progress: bool,
     docs_attach_in_progress: bool,
     master_in_progress: bool,
@@ -160,6 +181,7 @@ impl Default for App {
             expanded_detail_keys: HashSet::new(),
             resume_picker: None,
             backend_picker: None,
+            tests_mode_enabled: true,
             task_check_in_progress: false,
             docs_attach_in_progress: false,
             master_in_progress: false,
@@ -309,7 +331,11 @@ impl App {
     }
 
     pub fn prepare_master_prompt(&self, message: &str, tasks_file: &str) -> String {
-        subagents::build_master_prompt(tasks_file, &self.workflow.prepare_master_prompt(message))
+        subagents::build_master_prompt(
+            tasks_file,
+            &self.workflow.prepare_master_prompt(message),
+            self.tests_mode_enabled,
+        )
     }
 
     pub fn prepare_context_report_prompt(&self, context_entries: &[String]) -> String {
@@ -358,6 +384,10 @@ impl App {
         message.trim().eq_ignore_ascii_case("/planner")
     }
 
+    pub fn is_toggle_tests_command(message: &str) -> bool {
+        message.trim().eq_ignore_ascii_case("/toggle-tests")
+    }
+
     pub fn is_skip_plan_command(message: &str) -> bool {
         message.trim().eq_ignore_ascii_case("/skip-plan")
     }
@@ -391,10 +421,12 @@ impl App {
         message.trim().eq_ignore_ascii_case("/merge-audits")
     }
 
+    #[cfg(test)]
     pub fn is_split_tests_command(message: &str) -> bool {
         message.trim().eq_ignore_ascii_case("/split-tests")
     }
 
+    #[cfg(test)]
     pub fn is_merge_tests_command(message: &str) -> bool {
         message.trim().eq_ignore_ascii_case("/merge-tests")
     }
@@ -438,6 +470,15 @@ impl App {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
+        let tests_policy = if self.tests_mode_enabled {
+            "- Tests mode is ON: every plan step must include self-contained sections for Implementation, Auditing, and Test Writing.\n\
+             - Plan test coverage and deterministic execution strategy for each step."
+                .to_string()
+        } else {
+            "- Tests mode is OFF: do not include Test Writing sections.\n\
+             - Do not plan or request creating/modifying test files, test-only setup work, or test execution."
+                .to_string()
+        };
         format!(
             "You are the master Codex agent in planner mode.\n\
              Goal: collaboratively build a codebase-aware implementation plan before task generation.\n\
@@ -450,9 +491,14 @@ impl App {
              Clarification-first behavior:\n\
              - Do not generate or update planner markdown until you have asked follow-up questions that clarify scope, constraints, and success criteria.\n\
              - If key details are ambiguous, ask concise follow-up questions first and wait for answers before planning.\n\
+             Tests-mode policy:\n\
+             {tests_policy}\n\
              Plan formatting requirements:\n\
              - Break work down into concrete numbered steps.\n\
-             - For every step, include self-contained sections for Implementation, Auditing, and Test Writing.\n\
+             {}\n\
+             - Every step must be self-contained for isolated-context execution.\n\
+             - In each step, require explicit details for: files/modules to touch, intended behavior/outcomes, constraints/non-goals, and verification approach (commands/checks).\n\
+             - In each step, include an \"Isolated-context rationale\" sentence explaining why an implementor/auditor/test-writer can execute correctly from task details + listed artifacts without hidden chat context.\n\
              - Maintain readable markdown with sections and checklists.\n\
              - Track open questions/risks and assumptions.\n\
              - Keep it collaborative and iterative; update the markdown on each turn when the plan changes.\n\
@@ -462,6 +508,12 @@ impl App {
              User message:\n\
              {message}\n\
              After saving planner markdown updates, send a concise conversational summary of what changed and remind the user they can run `/convert` when ready to implement."
+            ,
+            if self.tests_mode_enabled {
+                "- For every step, include self-contained sections for Implementation, Auditing, and Test Writing."
+            } else {
+                "- For every step, include self-contained sections for Implementation and Auditing only."
+            }
         )
     }
 
@@ -777,6 +829,21 @@ impl App {
         self.master_in_progress = in_progress;
     }
 
+    pub fn set_tests_mode_enabled(&mut self, enabled: bool) {
+        self.tests_mode_enabled = enabled;
+        self.workflow.set_tests_mode_enabled(enabled);
+    }
+
+    pub fn toggle_tests_mode(&mut self) -> bool {
+        self.tests_mode_enabled = !self.tests_mode_enabled;
+        self.workflow.set_tests_mode_enabled(self.tests_mode_enabled);
+        self.tests_mode_enabled
+    }
+
+    pub fn tests_mode_enabled(&self) -> bool {
+        self.tests_mode_enabled
+    }
+
     pub fn is_master_in_progress(&self) -> bool {
         self.master_in_progress
     }
@@ -876,6 +943,17 @@ impl App {
         let byte_idx = char_to_byte_idx(&self.planner_markdown, self.planner_cursor);
         self.planner_markdown.insert(byte_idx, c);
         self.planner_cursor = self.planner_cursor.saturating_add(1);
+        self.planner_cursor_goal_col = None;
+        self.refresh_right_lines();
+    }
+
+    pub fn planner_input_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let byte_idx = char_to_byte_idx(&self.planner_markdown, self.planner_cursor);
+        self.planner_markdown.insert_str(byte_idx, text);
+        self.planner_cursor = self.planner_cursor.saturating_add(text.chars().count());
         self.planner_cursor_goal_col = None;
         self.refresh_right_lines();
     }

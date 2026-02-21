@@ -15,6 +15,7 @@ const FILES_CHANGED_END: &str = "FILES_CHANGED_END";
 const MAX_AUDIT_RETRIES: u8 = 4;
 const MAX_TEST_RETRIES: u8 = 5;
 const MAX_FINAL_AUDIT_RETRIES: u8 = 4;
+const ENFORCE_TESTS_MODE_RUNTIME_GATING: bool = !cfg!(test);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
@@ -209,6 +210,7 @@ pub struct Workflow {
     max_context_entries: usize,
     next_id: u64,
     execution_enabled: bool,
+    tests_mode_enabled: bool,
     recent_failures: Vec<WorkflowFailure>,
     exhausted_final_audits: HashSet<u64>,
 }
@@ -223,6 +225,7 @@ impl Default for Workflow {
             max_context_entries: 16,
             next_id: 1,
             execution_enabled: false,
+            tests_mode_enabled: true,
             recent_failures: Vec::new(),
             exhausted_final_audits: HashSet::new(),
         }
@@ -240,6 +243,7 @@ impl Workflow {
              4) After task-list updates are ready, tell the user `/start` is ready to run.\n\
              Execution is currently {}. Only start execution when user explicitly asks to start.\n\
              `/start` always resumes from the last unfinished task.\n\
+             Tests mode is currently {}.\n\
              Rolling task context:\n{}\n\
              Current task tree:\n{}\n\
              User message:\n{}\n\
@@ -249,10 +253,23 @@ impl Workflow {
             } else {
                 "disabled"
             },
+            if self.tests_mode_enabled { "ON" } else { "OFF" },
             self.context_block(),
             self.task_tree_compact(),
             user_message
         )
+    }
+
+    pub fn set_tests_mode_enabled(&mut self, enabled: bool) {
+        self.tests_mode_enabled = enabled;
+        if ENFORCE_TESTS_MODE_RUNTIME_GATING && !enabled {
+            self.drop_queued_test_jobs_when_disabled();
+            self.mark_tests_disabled_state();
+        }
+    }
+
+    pub fn tests_mode_enabled(&self) -> bool {
+        self.tests_mode_enabled
     }
 
     pub fn rolling_context_entries(&self) -> Vec<String> {
@@ -441,6 +458,9 @@ impl Workflow {
         self.active = None;
         self.recent_failures.clear();
         self.exhausted_final_audits.clear();
+        if ENFORCE_TESTS_MODE_RUNTIME_GATING && !self.tests_mode_enabled {
+            self.mark_tests_disabled_state();
+        }
         Ok(entries.len())
     }
 
@@ -464,6 +484,10 @@ impl Workflow {
         }
 
         self.execution_enabled = true;
+        if ENFORCE_TESTS_MODE_RUNTIME_GATING && !self.tests_mode_enabled {
+            self.drop_queued_test_jobs_when_disabled();
+            self.mark_tests_disabled_state();
+        }
         let queued = self.enqueue_ready_top_tasks();
         vec![format!(
             "System: Execution enabled. Queued {} task job(s).",
@@ -484,7 +508,16 @@ impl Workflow {
         if !self.execution_enabled || self.active.is_some() {
             return None;
         }
-        let job = self.queue.pop_front()?;
+        let job = loop {
+            let next = self.queue.pop_front()?;
+            if !ENFORCE_TESTS_MODE_RUNTIME_GATING
+                || self.tests_mode_enabled
+                || !next.kind.is_test_flow_job()
+            {
+                break next;
+            }
+            self.mark_skipped_test_job_done(&next);
+        };
         self.mark_job_started(&job);
         let role = job.kind.role();
         let run = self.run_for_job(&job);
@@ -917,12 +950,18 @@ impl Workflow {
                 feedback,
                 ..
             } => {
+                let tests_policy = if self.tests_mode_enabled {
+                    "Tests mode policy (ON): include cross-task test adequacy in holistic risk assessment when relevant."
+                } else {
+                    "Tests mode policy (OFF): do not fail solely for missing new tests; treat test additions/changes as out of scope."
+                };
                 let prompt = format!(
                     "You are a final audit sub-agent.\n\
                  Perform a holistic audit across all completed tasks and their outcomes.\n\
                  Focus on cross-task correctness, missing edge cases, integration risk, and overall quality gaps.\n\
                  Rolling task context:\n{}\n\
                  Current task tree:\n{}\n\
+                 {}\n\
                  {}\n\
                  Response protocol (required):\n\
                  - First line must be exactly one of:\n\
@@ -932,6 +971,7 @@ impl Workflow {
                  - If FAIL, include concrete issues and suggested fixes.",
                     self.context_block(),
                     self.task_tree_compact(),
+                    tests_policy,
                     feedback
                         .as_deref()
                         .map(|f| format!("Previous final-audit feedback to address:\n{f}"))
@@ -1059,7 +1099,8 @@ impl Workflow {
     ) -> bool {
         let Some(auditor_id) = self.find_next_pending_child_kind(implementor_id, TaskKind::Auditor)
         else {
-            if let Some(test_runner_id) =
+            if (!ENFORCE_TESTS_MODE_RUNTIME_GATING || self.tests_mode_enabled)
+                && let Some(test_runner_id) =
                 self.find_next_pending_child_kind(implementor_id, TaskKind::TestRunner)
             {
                 self.queue.push_back(WorkerJob {
@@ -1142,7 +1183,9 @@ impl Workflow {
                 break;
             }
 
-            let has_top_level_test_writer = if top_children_empty {
+            let has_top_level_test_writer = if top_children_empty
+                && (!ENFORCE_TESTS_MODE_RUNTIME_GATING || self.tests_mode_enabled)
+            {
                 if let Some(test_writer_id) =
                     self.start_kind_for_top(*top_id, TaskKind::TestWriter, "Test Writing")
                 {
@@ -1223,7 +1266,9 @@ impl Workflow {
                 if let Some(test_writer_id) =
                     self.find_next_pending_child_kind(*top_id, TaskKind::TestWriter)
                 {
-                    if !self.branch_has_active_or_queued(*top_id, TaskKind::TestWriter) {
+                    if (!ENFORCE_TESTS_MODE_RUNTIME_GATING || self.tests_mode_enabled)
+                        && !self.branch_has_active_or_queued(*top_id, TaskKind::TestWriter)
+                    {
                         self.queue.push_front(WorkerJob {
                             top_task_id: *top_id,
                             kind: WorkerJobKind::TestWriter {
@@ -1305,6 +1350,16 @@ impl Workflow {
         test_report: Option<String>,
         messages: &mut Vec<String>,
     ) -> bool {
+        if ENFORCE_TESTS_MODE_RUNTIME_GATING && !self.tests_mode_enabled {
+            self.set_status(test_writer_id, TaskStatus::Done);
+            messages.push(format!(
+                "System: Task #{} tests mode is OFF; skipping test-writer follow-up steps.",
+                top_task_id
+            ));
+            self.try_mark_top_done(top_task_id, messages);
+            return false;
+        }
+
         if allow_test_writer_auditor
             && let Some(auditor_id) =
                 self.find_next_pending_child_kind(test_writer_id, TaskKind::Auditor)
@@ -1443,15 +1498,19 @@ impl Workflow {
     }
 
     fn try_mark_top_done(&mut self, top_task_id: u64, messages: &mut Vec<String>) {
-        let (impl_done, test_done, already_done) = {
+        let (impl_done, test_done, already_done, requires_test_writer) = {
             let Some(top) = find_node(&self.tasks, top_task_id) else {
                 return;
             };
-            let impl_done = top
+            let implementor_children: Vec<&TaskNode> = top
                 .children
                 .iter()
                 .filter(|child| child.kind == TaskKind::Implementor)
-                .all(|node| Self::subtree_done(node));
+                .collect();
+            let impl_done = !implementor_children.is_empty()
+                && implementor_children
+                    .iter()
+                    .all(|node| Self::subtree_done(node));
             let requires_test_writer = top.children.iter().any(|c| c.kind == TaskKind::TestWriter);
             let test_done = if requires_test_writer {
                 top.children
@@ -1461,19 +1520,38 @@ impl Workflow {
             } else {
                 true
             };
-            (impl_done, test_done, top.status == TaskStatus::Done)
+            (
+                impl_done,
+                test_done,
+                top.status == TaskStatus::Done,
+                requires_test_writer,
+            )
         };
 
         if impl_done && test_done && !already_done {
             self.set_status(top_task_id, TaskStatus::Done);
-            self.push_context(format!(
-                "Task \"{}\" is complete after implementation, audit, test writing, and deterministic test runs all finished successfully.",
-                self.task_title(top_task_id)
-            ));
-            messages.push(format!(
-                "System: Task #{} completed after implementation and testing branches converged.",
-                top_task_id
-            ));
+            if self.tests_mode_enabled && requires_test_writer {
+                self.push_context(format!(
+                    "Task \"{}\" is complete after implementation, audit, test writing, and deterministic test runs all finished successfully.",
+                    self.task_title(top_task_id)
+                ));
+            } else {
+                self.push_context(format!(
+                    "Task \"{}\" is complete after implementation and audit finished successfully.",
+                    self.task_title(top_task_id)
+                ));
+            }
+            if self.tests_mode_enabled && requires_test_writer {
+                messages.push(format!(
+                    "System: Task #{} completed after implementation and testing branches converged.",
+                    top_task_id
+                ));
+            } else {
+                messages.push(format!(
+                    "System: Task #{} completed after implementation branch checks converged.",
+                    top_task_id
+                ));
+            }
         }
     }
 
@@ -1533,6 +1611,117 @@ impl Workflow {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         id
+    }
+
+    fn drop_queued_test_jobs_when_disabled(&mut self) {
+        self.queue.retain(|job| !job.kind.is_test_flow_job());
+    }
+
+    fn mark_tests_disabled_state(&mut self) {
+        let top_ids: Vec<u64> = self
+            .tasks
+            .iter()
+            .filter(|node| node.kind == TaskKind::Top)
+            .map(|node| node.id)
+            .collect();
+
+        for top_id in top_ids {
+            self.mark_tests_disabled_for_top(top_id);
+            let mut messages = Vec::new();
+            self.try_mark_top_done(top_id, &mut messages);
+        }
+    }
+
+    fn mark_tests_disabled_for_top(&mut self, top_task_id: u64) {
+        let Some(top) = find_node(&self.tasks, top_task_id) else {
+            return;
+        };
+
+        let top_test_writer_ids: Vec<u64> = top
+            .children
+            .iter()
+            .filter(|child| child.kind == TaskKind::TestWriter)
+            .map(|child| child.id)
+            .collect();
+        let implementor_test_runner_ids: Vec<u64> = top
+            .children
+            .iter()
+            .filter(|child| child.kind == TaskKind::Implementor)
+            .flat_map(|implementor| {
+                implementor
+                    .children
+                    .iter()
+                    .filter(|child| child.kind == TaskKind::TestRunner)
+                    .map(|child| child.id)
+            })
+            .collect();
+
+        for test_writer_id in top_test_writer_ids {
+            self.mark_subtree_done(test_writer_id);
+        }
+        for test_runner_id in implementor_test_runner_ids {
+            self.mark_subtree_done(test_runner_id);
+        }
+    }
+
+    fn mark_subtree_done(&mut self, node_id: u64) {
+        if let Some(node) = find_node_mut(&mut self.tasks, node_id) {
+            Self::mark_subtree_done_inner(node);
+        }
+    }
+
+    fn mark_subtree_done_inner(node: &mut TaskNode) {
+        node.status = TaskStatus::Done;
+        for child in &mut node.children {
+            Self::mark_subtree_done_inner(child);
+        }
+    }
+
+    fn mark_skipped_test_job_done(&mut self, job: &WorkerJob) {
+        match job.kind {
+            WorkerJobKind::TestWriter { test_writer_id, .. } => {
+                self.mark_subtree_done(test_writer_id);
+            }
+            WorkerJobKind::TestWriterAuditor {
+                test_writer_id,
+                auditor_id,
+                ..
+            } => {
+                self.mark_subtree_done(auditor_id);
+                self.mark_subtree_done(test_writer_id);
+            }
+            WorkerJobKind::TestRunner {
+                test_writer_id,
+                test_runner_id,
+                ..
+            } => {
+                self.mark_subtree_done(test_runner_id);
+                self.mark_subtree_done(test_writer_id);
+            }
+            WorkerJobKind::ImplementorTestRunner {
+                implementor_id,
+                test_runner_id,
+                ..
+            } => {
+                self.mark_subtree_done(test_runner_id);
+                self.set_status(implementor_id, TaskStatus::Done);
+            }
+            _ => {}
+        }
+        let mut messages = Vec::new();
+        self.try_mark_top_done(job.top_task_id, &mut messages);
+    }
+}
+
+impl WorkerJobKind {
+    fn is_test_flow_job(&self) -> bool {
+        matches!(
+            self,
+            WorkerJobKind::TestWriter { .. }
+                | WorkerJobKind::TestWriterAuditor { .. }
+                | WorkerJobKind::TestRunner { .. }
+                | WorkerJobKind::ImplementorTestRunner { .. }
+        )
     }
 }
 

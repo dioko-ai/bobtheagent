@@ -188,6 +188,7 @@ fn parse_launch_options_rejects_unknown_arg() {
 fn slash_commands_do_not_route_to_master() {
     assert!(!should_send_to_master("/start"));
     assert!(!should_send_to_master("/backend"));
+    assert!(!should_send_to_master("/toggle-tests"));
     assert!(!should_send_to_master("/convert"));
     assert!(!should_send_to_master("/skip-plan"));
     assert!(!should_send_to_master("/definitely-not-a-command"));
@@ -220,6 +221,7 @@ fn session_initialization_gate_only_triggers_for_non_slash_messages() {
 fn active_session_gate_applies_only_to_session_bound_slash_commands() {
     assert!(command_requires_active_session("/start"));
     assert!(command_requires_active_session("/convert"));
+    assert!(!command_requires_active_session("/toggle-tests"));
     assert!(!command_requires_active_session("/skip-plan"));
     assert!(command_requires_active_session("/attach-docs"));
     assert!(command_requires_active_session("/split-audits"));
@@ -233,11 +235,14 @@ fn active_session_gate_applies_only_to_session_bound_slash_commands() {
 fn known_slash_command_detection_is_strict() {
     assert!(is_known_slash_command("/start"));
     assert!(is_known_slash_command("/backend"));
+    assert!(is_known_slash_command("/toggle-tests"));
     assert!(is_known_slash_command("/convert"));
     assert!(is_known_slash_command("/skip-plan"));
     assert!(is_known_slash_command("/run"));
     assert!(is_known_slash_command("/quit"));
     assert!(is_known_slash_command("/attach-docs"));
+    assert!(!is_known_slash_command("/split-tests"));
+    assert!(!is_known_slash_command("/merge-tests"));
     assert!(!is_known_slash_command("/unknown-cmd"));
     assert!(!is_known_slash_command("hello"));
 }
@@ -304,6 +309,14 @@ fn submit_block_reason_prioritizes_project_info_and_respects_task_check_quit_esc
 fn backend_command_is_not_blocked_while_other_flows_are_in_flight() {
     assert_eq!(
         submit_block_reason(true, true, true, true, "/backend"),
+        None
+    );
+}
+
+#[test]
+fn toggle_tests_command_is_not_blocked_while_other_flows_are_in_flight() {
+    assert_eq!(
+        submit_block_reason(true, true, true, true, "/toggle-tests"),
         None
     );
 }
@@ -540,6 +553,144 @@ fn reset_task_check_runtime_clears_state() {
 
     assert!(!in_flight);
     assert!(baseline.is_none());
+}
+
+#[test]
+fn planner_paste_save_persists_immediately_without_waiting_for_debounce() {
+    let (store, session_dir) = open_temp_store("planner-paste-immediate-save");
+    let mut app = App::default();
+    app.set_planner_markdown("before".to_string());
+    store
+        .write_planner_markdown(app.planner_markdown())
+        .expect("seed planner markdown");
+
+    app.set_planner_markdown("after paste".to_string());
+    let mut dirty = true;
+    let mut last_keystroke_at = Some(Instant::now());
+
+    match persist_planner_markdown_if_changed(&mut app, Some(&store)) {
+        PlannerPersistResult::Persisted | PlannerPersistResult::Unchanged => {
+            dirty = false;
+            last_keystroke_at = None;
+        }
+        PlannerPersistResult::Deferred => {
+            mark_planner_manual_edit(&mut dirty, &mut last_keystroke_at);
+        }
+    }
+
+    assert_eq!(
+        store
+            .read_planner_markdown()
+            .expect("read planner markdown after paste"),
+        "after paste"
+    );
+    assert!(!dirty);
+    assert!(last_keystroke_at.is_none());
+
+    std::fs::remove_dir_all(session_dir).ok();
+}
+
+#[test]
+fn planner_typing_does_not_save_before_debounce_expires() {
+    let (store, session_dir) = open_temp_store("planner-typing-pre-debounce");
+    let mut app = App::default();
+    app.set_planner_markdown("typed draft".to_string());
+    let mut dirty = true;
+    let mut last_keystroke_at = Some(Instant::now());
+
+    flush_debounced_planner_autosave_if_due(
+        &mut app,
+        Some(&store),
+        &mut dirty,
+        &mut last_keystroke_at,
+    );
+
+    assert_eq!(
+        store
+            .read_planner_markdown()
+            .expect("read planner markdown before debounce"),
+        ""
+    );
+    assert!(dirty);
+    assert!(last_keystroke_at.is_some());
+
+    std::fs::remove_dir_all(session_dir).ok();
+}
+
+#[test]
+fn planner_typing_saves_after_debounce_from_most_recent_keystroke() {
+    let (store, session_dir) = open_temp_store("planner-typing-post-debounce");
+    let mut app = App::default();
+    app.set_planner_markdown("typed draft".to_string());
+    let mut dirty = false;
+    let mut last_keystroke_at = None;
+
+    mark_planner_manual_edit(&mut dirty, &mut last_keystroke_at);
+    flush_debounced_planner_autosave_if_due(
+        &mut app,
+        Some(&store),
+        &mut dirty,
+        &mut last_keystroke_at,
+    );
+    assert_eq!(
+        store
+            .read_planner_markdown()
+            .expect("read planner markdown before debounce expiry"),
+        ""
+    );
+    assert!(dirty);
+
+    last_keystroke_at = Instant::now()
+        .checked_sub(PLANNER_AUTOSAVE_DEBOUNCE + Duration::from_millis(5))
+        .or(last_keystroke_at);
+    flush_debounced_planner_autosave_if_due(
+        &mut app,
+        Some(&store),
+        &mut dirty,
+        &mut last_keystroke_at,
+    );
+
+    assert_eq!(
+        store
+            .read_planner_markdown()
+            .expect("read planner markdown after debounce expiry"),
+        "typed draft"
+    );
+    assert!(!dirty);
+    assert!(last_keystroke_at.is_none());
+
+    std::fs::remove_dir_all(session_dir).ok();
+}
+
+#[test]
+fn planner_persistence_writes_only_when_content_changes() {
+    let (store, session_dir) = open_temp_store("planner-content-change-only");
+    let mut app = App::default();
+    app.set_planner_markdown("same content".to_string());
+    store
+        .write_planner_markdown(app.planner_markdown())
+        .expect("seed planner markdown");
+
+    let result = persist_planner_markdown_if_changed(&mut app, Some(&store));
+    assert!(matches!(result, PlannerPersistResult::Unchanged));
+    assert_eq!(
+        store
+            .read_planner_markdown()
+            .expect("read planner markdown"),
+        "same content"
+    );
+
+    app.set_planner_markdown("updated content".to_string());
+    let changed_result = persist_planner_markdown_if_changed(&mut app, Some(&store));
+    assert!(matches!(changed_result, PlannerPersistResult::Persisted));
+    assert_eq!(
+        store
+            .read_planner_markdown()
+            .expect("read updated planner markdown"),
+        "updated content"
+    );
+
+    std::fs::remove_dir_all(session_dir).ok();
 }
 
 #[test]
@@ -1262,6 +1413,93 @@ fn convert_submit_uses_prompt_service_and_captures_tasks_baseline() {
 }
 
 #[test]
+fn convert_submit_persists_latest_planner_markdown_before_conversion() {
+    let mut app = App::default();
+    let master_adapter = CodexAdapter::new();
+    let master_report_adapter = CodexAdapter::new();
+    let project_info_adapter = CodexAdapter::new();
+    let docs_attach_adapter = CodexAdapter::new();
+    let test_runner_adapter = TestRunnerAdapter::new();
+    let model_routing = CodexAgentModelRouting::default();
+
+    let mut worker_agent_adapters: HashMap<String, CodexAdapter> = HashMap::new();
+    let mut active_worker_context_key = None;
+    let cwd = std::env::current_dir().expect("cwd");
+    let (store, session_dir) = open_temp_store("metaagent-convert-persist-planner");
+    store
+        .write_planner_markdown("stale planner markdown")
+        .expect("seed planner markdown");
+    let mut session_store = Some(store);
+    std::fs::write(
+        session_store
+            .as_ref()
+            .expect("active session")
+            .tasks_file(),
+        "[]",
+    )
+    .expect("write baseline tasks");
+    app.set_planner_markdown("latest planner markdown".to_string());
+
+    let mut pending_task_write_baseline = None;
+    let mut docs_attach_in_flight = false;
+    let mut master_session_intro_needed = true;
+    let mut master_report_session_intro_needed = true;
+    let mut pending_master_message_after_project_info = None;
+    let mut project_info_in_flight = false;
+    let mut project_info_stage = None;
+    let mut project_info_text = Some("existing project context".to_string());
+    let mut master_report_in_flight = false;
+    let mut pending_master_report_prompts = std::collections::VecDeque::new();
+    let mut master_report_transcript = Vec::new();
+    let mut task_check_in_flight = false;
+    let mut task_check_baseline = None;
+
+    let backend = ratatui::backend::TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+
+    submit_user_message(
+        &mut app,
+        "/convert".to_string(),
+        &master_adapter,
+        &master_report_adapter,
+        &project_info_adapter,
+        &mut worker_agent_adapters,
+        &mut active_worker_context_key,
+        &docs_attach_adapter,
+        &test_runner_adapter,
+        &mut master_report_in_flight,
+        &mut pending_master_report_prompts,
+        &mut master_report_transcript,
+        &mut task_check_in_flight,
+        &mut task_check_baseline,
+        &mut session_store,
+        &cwd,
+        &mut terminal,
+        &mut pending_task_write_baseline,
+        &mut docs_attach_in_flight,
+        &mut master_session_intro_needed,
+        &mut master_report_session_intro_needed,
+        &mut pending_master_message_after_project_info,
+        &mut project_info_in_flight,
+        &mut project_info_stage,
+        &mut project_info_text,
+        &model_routing,
+    )
+    .expect("convert should succeed");
+
+    assert_eq!(
+        session_store
+            .as_ref()
+            .expect("active session")
+            .read_planner_markdown()
+            .expect("read planner markdown"),
+        "latest planner markdown"
+    );
+
+    std::fs::remove_dir_all(session_dir).ok();
+}
+
+#[test]
 fn normal_submit_with_project_context_uses_prompt_service_path() {
     let mut app = App::default();
     app.set_right_pane_mode(RightPaneMode::TaskList);
@@ -1857,6 +2095,47 @@ fn parses_silent_master_commands() {
 }
 
 #[test]
+fn split_and_merge_tests_silent_commands_are_inactive() {
+    let (session_store, session_dir) = open_temp_store("metaagent-silent-tests-commands");
+    let mut app = App::default();
+    let master_adapter = CodexAdapter::new();
+    let backend = ratatui::backend::TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut pending_task_write_baseline = None;
+    let mut master_session_intro_needed = true;
+
+    let split_handled = handle_silent_master_command(
+        &mut app,
+        "/split-tests",
+        &master_adapter,
+        &session_store,
+        &mut terminal,
+        &mut pending_task_write_baseline,
+        &mut master_session_intro_needed,
+        None,
+    )
+    .expect("split-tests handler should return cleanly");
+    assert!(!split_handled);
+    assert!(!app.is_master_in_progress());
+
+    let merge_handled = handle_silent_master_command(
+        &mut app,
+        "/merge-tests",
+        &master_adapter,
+        &session_store,
+        &mut terminal,
+        &mut pending_task_write_baseline,
+        &mut master_session_intro_needed,
+        None,
+    )
+    .expect("merge-tests handler should return cleanly");
+    assert!(!merge_handled);
+    assert!(!app.is_master_in_progress());
+
+    let _ = std::fs::remove_dir_all(&session_dir);
+}
+
+#[test]
 fn build_resume_options_excludes_current_session_dir() {
     let current = std::path::Path::new("/tmp/current");
     let options = build_resume_options(
@@ -2404,6 +2683,158 @@ fn apply_backend_selection_persists_and_reports_agentbob_default_success_path() 
 }
 
 #[test]
+fn toggle_tests_command_persists_and_reports_success() {
+    with_temp_home("metaagent-toggle-tests-success", |home| {
+        let mut app = App::default();
+        let master_adapter = CodexAdapter::new();
+        let master_report_adapter = CodexAdapter::new();
+        let project_info_adapter = CodexAdapter::new();
+        let docs_attach_adapter = CodexAdapter::new();
+        let test_runner_adapter = TestRunnerAdapter::new();
+        let model_routing = CodexAgentModelRouting::default();
+
+        let mut worker_agent_adapters: HashMap<String, CodexAdapter> = HashMap::new();
+        let mut active_worker_context_key = None;
+        let mut session_store: Option<SessionStore> = None;
+        let cwd = std::env::current_dir().expect("cwd");
+        let mut pending_task_write_baseline = None;
+        let mut docs_attach_in_flight = false;
+        let mut master_session_intro_needed = true;
+        let mut master_report_session_intro_needed = true;
+        let mut pending_master_message_after_project_info = None;
+        let mut project_info_in_flight = false;
+        let mut project_info_stage = None;
+        let mut project_info_text = None;
+        let mut master_report_in_flight = false;
+        let mut pending_master_report_prompts = std::collections::VecDeque::new();
+        let mut master_report_transcript = Vec::new();
+        let mut task_check_in_flight = false;
+        let mut task_check_baseline = None;
+
+        let backend = ratatui::backend::TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+
+        assert!(app.tests_mode_enabled());
+        submit_user_message(
+            &mut app,
+            "/toggle-tests".to_string(),
+            &master_adapter,
+            &master_report_adapter,
+            &project_info_adapter,
+            &mut worker_agent_adapters,
+            &mut active_worker_context_key,
+            &docs_attach_adapter,
+            &test_runner_adapter,
+            &mut master_report_in_flight,
+            &mut pending_master_report_prompts,
+            &mut master_report_transcript,
+            &mut task_check_in_flight,
+            &mut task_check_baseline,
+            &mut session_store,
+            &cwd,
+            &mut terminal,
+            &mut pending_task_write_baseline,
+            &mut docs_attach_in_flight,
+            &mut master_session_intro_needed,
+            &mut master_report_session_intro_needed,
+            &mut pending_master_message_after_project_info,
+            &mut project_info_in_flight,
+            &mut project_info_stage,
+            &mut project_info_text,
+            &model_routing,
+        )
+        .expect("toggle-tests command should succeed");
+
+        assert!(!app.tests_mode_enabled());
+        let message = app.left_bottom_lines().last().expect("status message");
+        assert!(message.contains("System: Tests mode is now OFF. Saved to"));
+        assert!(message.contains(&home.join(".agentbob/config.toml").display().to_string()));
+
+        let config = std::fs::read_to_string(home.join(".agentbob/config.toml"))
+            .expect("config should be persisted");
+        assert!(config.contains("[tests]"));
+        assert!(config.contains("enabled = false"));
+    });
+}
+
+#[test]
+fn toggle_tests_command_persist_failure_keeps_runtime_state_and_reports_error() {
+    with_temp_home("metaagent-toggle-tests-failure", |home| {
+        let config_dir = home.join(".agentbob");
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        std::fs::create_dir(config_dir.join("config.toml")).expect("create invalid config path");
+
+        let mut app = App::default();
+        let master_adapter = CodexAdapter::new();
+        let master_report_adapter = CodexAdapter::new();
+        let project_info_adapter = CodexAdapter::new();
+        let docs_attach_adapter = CodexAdapter::new();
+        let test_runner_adapter = TestRunnerAdapter::new();
+        let model_routing = CodexAgentModelRouting::default();
+
+        let mut worker_agent_adapters: HashMap<String, CodexAdapter> = HashMap::new();
+        let mut active_worker_context_key = None;
+        let mut session_store: Option<SessionStore> = None;
+        let cwd = std::env::current_dir().expect("cwd");
+        let mut pending_task_write_baseline = None;
+        let mut docs_attach_in_flight = false;
+        let mut master_session_intro_needed = true;
+        let mut master_report_session_intro_needed = true;
+        let mut pending_master_message_after_project_info = None;
+        let mut project_info_in_flight = false;
+        let mut project_info_stage = None;
+        let mut project_info_text = None;
+        let mut master_report_in_flight = false;
+        let mut pending_master_report_prompts = std::collections::VecDeque::new();
+        let mut master_report_transcript = Vec::new();
+        let mut task_check_in_flight = false;
+        let mut task_check_baseline = None;
+
+        let backend = ratatui::backend::TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+
+        assert!(app.tests_mode_enabled());
+        submit_user_message(
+            &mut app,
+            "/toggle-tests".to_string(),
+            &master_adapter,
+            &master_report_adapter,
+            &project_info_adapter,
+            &mut worker_agent_adapters,
+            &mut active_worker_context_key,
+            &docs_attach_adapter,
+            &test_runner_adapter,
+            &mut master_report_in_flight,
+            &mut pending_master_report_prompts,
+            &mut master_report_transcript,
+            &mut task_check_in_flight,
+            &mut task_check_baseline,
+            &mut session_store,
+            &cwd,
+            &mut terminal,
+            &mut pending_task_write_baseline,
+            &mut docs_attach_in_flight,
+            &mut master_session_intro_needed,
+            &mut master_report_session_intro_needed,
+            &mut pending_master_message_after_project_info,
+            &mut project_info_in_flight,
+            &mut project_info_stage,
+            &mut project_info_text,
+            &model_routing,
+        )
+        .expect("toggle-tests command should succeed despite persistence failure");
+
+        assert!(!app.tests_mode_enabled());
+        let message = app.left_bottom_lines().last().expect("status message");
+        assert!(message.contains("System: Tests mode is now OFF for this run"));
+        assert!(message.contains("persistence to config.toml failed"));
+        assert!(message.contains("~/.agentbob/config.toml"));
+        assert!(message.contains("~/.bob/config.toml"));
+        assert!(message.contains("~/.metaagent/config.toml"));
+    });
+}
+
+#[test]
 fn apply_backend_selection_persists_and_reports_metaagent_fallback_success_path() {
     with_temp_home("metaagent-backend-select-success-legacy", |home| {
         let legacy_config = home.join(".metaagent/config.toml");
@@ -2665,7 +3096,19 @@ fn task_check_prompt_includes_tasks_path_and_guardrails() {
     assert!(prompt.contains("/tmp/session/project-info.md"));
     assert!(prompt.contains("/tmp/session/meta.json"));
     assert!(prompt.contains("edit this tasks.json directly to fix them"));
+    assert!(prompt.contains(
+        "Enforce self-contained details for isolated-context execution on every task/subtask"
+    ));
+    assert!(prompt.contains(
+        "Enforce explicit isolated-context rationale on every task/subtask"
+    ));
+    assert!(prompt.contains(
+        "If any task details are missing these fields, fix details text directly while preserving intent/status/order."
+    ));
     assert!(prompt.contains("each test_writer must be a direct child of a top-level task"));
+    assert!(prompt.contains(
+        "Focus especially on implementor/auditor/test-runner and test-writer/test-runner relationships."
+    ));
     assert!(prompt.contains("Enforce special-case sequencing for test bootstrapping"));
     assert!(prompt.contains("meta.json test_command is null/empty"));
     assert!(prompt.contains("dedicated testing-setup top-level task"));

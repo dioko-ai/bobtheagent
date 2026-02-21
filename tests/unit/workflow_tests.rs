@@ -1,5 +1,19 @@
 use super::*;
 
+const REMOVED_TEST_DECISION_QUESTIONS: [&str; 5] = [
+    "Testing-decision flow before initial planning in a session:",
+    "If project info indicates tests are absent/unknown, ask user whether to set up a testing system first.",
+    "If tests exist, ask whether to write new tests as part of this work.",
+    "If tests exist, also ask whether to enforce existing tests (do not break) or ignore tests entirely.",
+    "If user testing choices are still missing, ask concise questions first and wait; do not write tasks.json yet.",
+];
+
+fn assert_prompt_omits_removed_test_decision_questions(prompt: &str) {
+    for removed in REMOVED_TEST_DECISION_QUESTIONS {
+        assert!(!prompt.contains(removed), "prompt should not contain: {removed}");
+    }
+}
+
 fn seed_single_default_task(wf: &mut Workflow, title: &str) {
     wf.sync_planner_tasks_from_file(vec![
         PlannerTaskFileEntry {
@@ -674,6 +688,31 @@ fn deterministic_test_runner_loops_back_to_test_writer_on_failure() {
         }
         JobRun::DeterministicTestRun => panic!("expected agent prompt"),
     }
+}
+
+#[test]
+fn tests_mode_off_sync_keeps_top_task_pending_until_runtime_children_exist() {
+    let mut wf = Workflow::default();
+    wf.set_tests_mode_enabled(false);
+
+    wf.sync_planner_tasks_from_file(vec![PlannerTaskFileEntry {
+        id: "top".to_string(),
+        title: "Do work".to_string(),
+        details: "top details".to_string(),
+        docs: Vec::new(),
+        kind: PlannerTaskKindFile::Task,
+        status: PlannerTaskStatusFile::Pending,
+        parent_id: None,
+        order: Some(0),
+    }])
+    .expect("sync should succeed");
+
+    let snapshot = wf.planner_tasks_for_file();
+    let top_status = snapshot
+        .iter()
+        .find(|entry| entry.id == "top")
+        .map(|entry| entry.status);
+    assert_eq!(top_status, Some(PlannerTaskStatusFile::Pending));
 }
 
 #[test]
@@ -2882,6 +2921,12 @@ fn final_audit_requires_explicit_pass_token_to_complete() {
         JobRun::AgentPrompt(prompt) => {
             assert!(prompt.contains("AUDIT_RESULT: PASS"));
             assert!(prompt.contains("AUDIT_RESULT: FAIL"));
+            assert!(prompt.contains(
+                "Tests mode policy (ON): include cross-task test adequacy in holistic risk assessment when relevant."
+            ));
+            assert!(
+                !prompt.contains("If tests exist, ask whether to write new tests as part of this work.")
+            );
         }
         JobRun::DeterministicTestRun => panic!("expected final audit prompt"),
     }
@@ -2907,6 +2952,70 @@ fn final_audit_requires_explicit_pass_token_to_complete() {
         .find(|entry| entry.id == "fa")
         .map(|entry| entry.status);
     assert_eq!(second_status, Some(PlannerTaskStatusFile::Done));
+}
+
+#[test]
+fn final_audit_prompt_in_tests_mode_off_uses_off_policy_language() {
+    let mut wf = Workflow::default();
+    wf.set_tests_mode_enabled(false);
+    seed_single_default_task_with_final_audit(&mut wf, "Do work");
+    let final_audit = complete_non_final_branches_and_start_final_audit(&mut wf);
+    match final_audit.run {
+        JobRun::AgentPrompt(prompt) => {
+            assert!(prompt.contains(
+                "Tests mode policy (OFF): do not fail solely for missing new tests; treat test additions/changes as out of scope."
+            ));
+            assert!(
+                !prompt.contains("Tests mode policy (ON): include cross-task test adequacy in holistic risk assessment when relevant.")
+            );
+            assert_prompt_omits_removed_test_decision_questions(&prompt);
+        }
+        JobRun::DeterministicTestRun => panic!("expected final audit prompt"),
+    }
+}
+
+#[test]
+fn final_audit_prompt_in_tests_mode_on_uses_on_policy_and_omits_master_decision_questions() {
+    let mut wf = Workflow::default();
+    wf.set_tests_mode_enabled(true);
+    seed_single_default_task_with_final_audit(&mut wf, "Do work");
+    let final_audit = complete_non_final_branches_and_start_final_audit(&mut wf);
+    match final_audit.run {
+        JobRun::AgentPrompt(prompt) => {
+            assert!(prompt.contains(
+                "Tests mode policy (ON): include cross-task test adequacy in holistic risk assessment when relevant."
+            ));
+            assert!(
+                !prompt.contains("Tests mode policy (OFF): do not fail solely for missing new tests; treat test additions/changes as out of scope.")
+            );
+            assert_prompt_omits_removed_test_decision_questions(&prompt);
+        }
+        JobRun::DeterministicTestRun => panic!("expected final audit prompt"),
+    }
+}
+
+#[test]
+fn workflow_master_prompt_in_tests_mode_on_omits_test_decision_questions() {
+    let mut wf = Workflow::default();
+    wf.set_tests_mode_enabled(true);
+    seed_single_default_task(&mut wf, "Do work");
+
+    let prompt = wf.prepare_master_prompt("Plan next steps");
+    assert!(prompt.contains("Tests mode is currently ON."));
+    assert!(!prompt.contains("Tests mode is currently OFF."));
+    assert_prompt_omits_removed_test_decision_questions(&prompt);
+}
+
+#[test]
+fn workflow_master_prompt_in_tests_mode_off_omits_test_decision_questions() {
+    let mut wf = Workflow::default();
+    wf.set_tests_mode_enabled(false);
+    seed_single_default_task(&mut wf, "Do work");
+
+    let prompt = wf.prepare_master_prompt("Plan next steps");
+    assert!(prompt.contains("Tests mode is currently OFF."));
+    assert!(!prompt.contains("Tests mode is currently ON."));
+    assert_prompt_omits_removed_test_decision_questions(&prompt);
 }
 
 #[test]

@@ -361,7 +361,7 @@ pub fn render(frame: &mut Frame, app: &App, theme: &Theme) {
         Block::default().style(Style::default().bg(theme.status_bg)),
         status,
     );
-    let help = Paragraph::new(status_line_text(frame.area()))
+    let help = Paragraph::new(status_line_text(frame.area(), app.tests_mode_enabled()))
         .style(Style::default().bg(theme.status_bg).fg(theme.muted_fg))
         .block(
             Block::default()
@@ -508,12 +508,18 @@ fn render_worker_output_pane(
     );
 }
 
-fn status_line_text(screen: Rect) -> String {
-    if is_narrow_layout(screen) {
-        STATUS_HELP_TEXT_NARROW.to_string()
+fn status_line_text(screen: Rect, tests_mode_enabled: bool) -> String {
+    let base = if is_narrow_layout(screen) {
+        STATUS_HELP_TEXT_NARROW
     } else {
-        STATUS_HELP_TEXT_WIDE.to_string()
-    }
+        STATUS_HELP_TEXT_WIDE
+    };
+    let tests_indicator = if tests_mode_enabled {
+        "TESTS: ON"
+    } else {
+        "TESTS: OFF"
+    };
+    format!("{base} | {tests_indicator}")
 }
 
 fn master_working_dots(ticks: u64) -> &'static str {

@@ -13,6 +13,11 @@ pub(crate) fn build_prompt(
     changed_files_summary: &Option<String>,
     pass: u8,
 ) -> String {
+    let tests_policy = if workflow.tests_mode_enabled() {
+        "Tests mode policy (ON): do not audit test quality/coverage or request test changes in this pass; limit findings to implementation concerns only."
+    } else {
+        "Tests mode policy (OFF): testing is disabled; do not request any test additions or test changes."
+    };
     format!(
         "You are an audit sub-agent reviewing implementation output.\n\
          Top-level task: {}\n\
@@ -23,7 +28,7 @@ pub(crate) fn build_prompt(
          Rolling task context:\n{}\n\
          Implementor changed-files summary:\n{}\n\
          Implementation output to audit:\n{}\n\
-         Guardrail: do not audit test quality/coverage or request test changes; limit findings to implementation concerns only.\n\
+         {}\n\
          Scope lock (required): audit only the parent implementor task/details above. Do not audit unrelated tasks, broader roadmap items, or unrelated files.\n\
          Execution guardrail: do not run tests and do not execute/check shell commands. Command/test execution is handled by a subsequent dedicated agent.\n\
          Strictness policy for this audit pass:\n{}\n\
@@ -46,7 +51,8 @@ pub(crate) fn build_prompt(
         implementation_report
             .as_deref()
             .unwrap_or("(no implementation output captured)"),
-        audit_strictness_policy(pass),
+        tests_policy,
+        audit_strictness_policy(pass)
     )
 }
 

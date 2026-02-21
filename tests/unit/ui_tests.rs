@@ -253,6 +253,49 @@ fn render_shows_task_check_overlay_when_running() {
 }
 
 #[test]
+fn render_status_line_shows_tests_on_across_modes() {
+    let panes = [Pane::LeftTop, Pane::LeftBottom, Pane::Right];
+    let right_modes = [RightPaneMode::TaskList, RightPaneMode::PlannerMarkdown];
+
+    for pane in panes {
+        for right_mode in right_modes {
+            let mut app = App::default();
+            app.active_pane = pane;
+            app.set_right_pane_mode(right_mode);
+            app.set_tests_mode_enabled(true);
+
+            let text = render_text(&app, 120, 30);
+            assert!(
+                text.contains("TESTS: ON"),
+                "status line should show TESTS: ON for pane={pane:?} right_mode={right_mode:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn render_status_line_shows_tests_off_across_modes() {
+    let panes = [Pane::LeftTop, Pane::LeftBottom, Pane::Right];
+    let right_modes = [RightPaneMode::TaskList, RightPaneMode::PlannerMarkdown];
+
+    for pane in panes {
+        for right_mode in right_modes {
+            let mut app = App::default();
+            app.active_pane = pane;
+            app.set_right_pane_mode(right_mode);
+            app.set_tests_mode_enabled(false);
+
+            let text = render_text(&app, 120, 30);
+            assert!(
+                text.contains("TESTS: OFF"),
+                "status line should show TESTS: OFF for pane={pane:?} right_mode={right_mode:?}"
+            );
+            assert!(!text.contains("TESTS: ON"));
+        }
+    }
+}
+
+#[test]
 fn render_shows_overlay_in_right_pane_on_wide_layout() {
     let mut app = App::default();
     app.active_pane = Pane::LeftBottom;

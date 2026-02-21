@@ -10,6 +10,11 @@ pub(crate) fn build_prompt(
     test_report: &Option<String>,
     pass: u8,
 ) -> String {
+    let tests_policy = if workflow.tests_mode_enabled() {
+        "Tests mode policy (ON): audit test quality, relevance, and behavior coverage normally."
+    } else {
+        "Tests mode policy (OFF): do not request new tests or test edits; only report that test auditing is disabled by policy."
+    };
     format!(
         "You are an audit sub-agent reviewing test-writing output.\n\
          Top-level task: {}\n\
@@ -19,7 +24,7 @@ pub(crate) fn build_prompt(
          Audit pass: {} of {}\n\
          Rolling task context:\n{}\n\
          Test-writer output to audit:\n{}\n\
-         Focus on test quality, coverage relevance, and whether tests clearly validate intended behavior.\n\
+         {}\n\
          Execution guardrail: do not run tests and do not execute/check shell commands. Command/test execution is handled by a subsequent dedicated agent.\n\
          Strictness policy for this audit pass:\n{}\n\
          Response protocol (required):\n\
@@ -38,6 +43,7 @@ pub(crate) fn build_prompt(
         test_report
             .as_deref()
             .unwrap_or("(no test-writer output captured)"),
+        tests_policy,
         audit_strictness_policy(pass),
     )
 }
@@ -63,6 +69,16 @@ pub(crate) fn on_completion(
 
     let issues = !success || audit_detects_issues(transcript);
     if issues {
+        if super::ENFORCE_TESTS_MODE_RUNTIME_GATING && !workflow.tests_mode_enabled() {
+            workflow.set_status(auditor_id, TaskStatus::Done);
+            workflow.set_status(test_writer_id, TaskStatus::Done);
+            messages.push(format!(
+                "System: Task #{} tests mode is OFF; skipping test-writer audit retries.",
+                top_task_id
+            ));
+            workflow.try_mark_top_done(top_task_id, messages);
+            return;
+        }
         workflow.set_status(test_writer_id, TaskStatus::NeedsChanges);
         if pass >= super::MAX_AUDIT_RETRIES {
             workflow.set_status(auditor_id, TaskStatus::Done);

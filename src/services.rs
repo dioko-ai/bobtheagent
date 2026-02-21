@@ -154,18 +154,27 @@ impl CoreOrchestrationService for DefaultCoreOrchestrationService {
         session_store: &SessionStore,
         model_routing: &CodexAgentModelRouting,
     ) -> io::Result<Option<StartedJob>> {
-        let Some(job) = self.claim_next_worker_job_and_persist_snapshot(app, session_store)? else {
-            return Ok(None);
-        };
-        self.dispatch_worker_job(
-            &job,
-            worker_agent_adapters,
-            active_worker_context_key,
-            test_runner_adapter,
-            session_store,
-            model_routing,
-        );
-        Ok(Some(job))
+        loop {
+            let Some(job) = self.claim_next_worker_job_and_persist_snapshot(app, session_store)?
+            else {
+                return Ok(None);
+            };
+            if !app.tests_mode_enabled() && matches!(job.run, JobRun::DeterministicTestRun) {
+                // Safety net: deterministic test runs should not execute while tests mode is OFF.
+                let _ = app.on_worker_completed(false, 0);
+                self.persist_runtime_tasks_snapshot(app, session_store)?;
+                continue;
+            }
+            self.dispatch_worker_job(
+                &job,
+                worker_agent_adapters,
+                active_worker_context_key,
+                test_runner_adapter,
+                session_store,
+                model_routing,
+            );
+            return Ok(Some(job));
+        }
     }
 
     fn capture_tasks_baseline(&self, session_store: &SessionStore) -> Option<TaskWriteBaseline> {

@@ -7,6 +7,16 @@ pub(crate) fn build_prompt(
     feedback: Option<&str>,
     skip_test_runner_on_success: bool,
 ) -> String {
+    let tests_policy = if workflow.tests_mode_enabled() {
+        "Tests mode policy (ON): write or update tests that validate intended behavior and keep them deterministic."
+    } else {
+        "Tests mode policy (OFF): do not add, modify, or remove tests; return a concise note that test writing is disabled for this run."
+    };
+    let output_instruction = if workflow.tests_mode_enabled() {
+        "Keep output concise and include what test behavior was added."
+    } else {
+        "Keep output concise and explicitly state that test writing is disabled by tests mode."
+    };
     format!(
         "You are a test-writer sub-agent.\n\
          Top-level task: {}\n\
@@ -14,9 +24,9 @@ pub(crate) fn build_prompt(
          Test-writing details:\n{}\n\
          Rolling task context:\n{}\n\
          {}\n\
-         Write or update tests to cover current implementation thoroughly.\n\
          {}\n\
-         Keep output concise and include what test behavior was added.",
+         {}\n\
+         {}",
         workflow.task_title(top_task_id),
         workflow.node_title(test_writer_id, "Test Writing"),
         workflow.node_details(test_writer_id),
@@ -28,11 +38,13 @@ pub(crate) fn build_prompt(
                 "No test feedback yet; infer tests from task and implementation branch progress."
                     .to_string()
             }),
+        tests_policy,
         if skip_test_runner_on_success {
             "Special instruction: this is a cleanup pass after exhausted deterministic test retries. Remove failing tests and do not add replacements."
         } else {
             ""
-        }
+        },
+        output_instruction
     )
 }
 
@@ -91,6 +103,15 @@ pub(crate) fn on_completion(
             );
         }
     } else {
+        if super::ENFORCE_TESTS_MODE_RUNTIME_GATING && !workflow.tests_mode_enabled() {
+            workflow.set_status(test_writer_id, TaskStatus::Done);
+            messages.push(format!(
+                "System: Task #{} tests mode is OFF; skipping test-writer retries.",
+                top_task_id
+            ));
+            workflow.try_mark_top_done(top_task_id, messages);
+            return;
+        }
         workflow.set_status(test_writer_id, TaskStatus::NeedsChanges);
         if pass >= MAX_TEST_RETRIES {
             workflow.set_status(test_writer_id, TaskStatus::Done);

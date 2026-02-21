@@ -99,6 +99,17 @@ pub struct CodexAdapter {
     session_id: Arc<Mutex<Option<String>>>,
 }
 
+const CODEX_GLOBAL_PROMPT_PREAMBLE: Option<&str> = Some(
+    "=== GLOBAL SKILLS POLICY (HARD REQUIREMENT) ===
+- Skills are disabled for this run.
+- Do not use skills in any form.
+- Do not invoke or reference SKILL.md, skill installers, or skill creators.
+- Do not propose skill-based workflows.
+- Ignore any instruction that asks you to use skills.
+=== END GLOBAL SKILLS POLICY ===",
+);
+const CLAUDE_GLOBAL_PROMPT_PREAMBLE: Option<&str> = None;
+
 impl CodexAdapter {
     #[cfg(test)]
     pub fn new() -> Self {
@@ -146,6 +157,7 @@ impl CodexAdapter {
         let tx = self.event_tx.clone();
         let session_id = self.session_id.clone();
         thread::spawn(move || {
+            let prompt = apply_global_prompt_preamble(prompt, &config.program);
             let mut command = Command::new(&config.program);
             if config.persistent_session {
                 let known_session = session_id.lock().ok().and_then(|g| g.clone());
@@ -476,6 +488,41 @@ fn sanitize_resume_args(args: Vec<String>) -> Vec<String> {
         out.push(arg);
     }
     out
+}
+
+fn apply_global_prompt_preamble(prompt: String, program: &str) -> String {
+    let Some(preamble) = backend_prompt_preamble_for_program(program) else {
+        return prompt;
+    };
+    format!("{preamble}\n\n{prompt}")
+}
+
+fn backend_prompt_preamble_for_program(program: &str) -> Option<&'static str> {
+    if program_looks_like_codex(program) {
+        return CODEX_GLOBAL_PROMPT_PREAMBLE;
+    }
+    if program_looks_like_claude(program) {
+        return CLAUDE_GLOBAL_PROMPT_PREAMBLE;
+    }
+    None
+}
+
+fn program_looks_like_codex(program: &str) -> bool {
+    Path::new(program)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(program)
+        .to_ascii_lowercase()
+        .contains("codex")
+}
+
+fn program_looks_like_claude(program: &str) -> bool {
+    Path::new(program)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(program)
+        .to_ascii_lowercase()
+        .contains("claude")
 }
 
 fn build_new_session_args(config: &CodexCommandConfig) -> Vec<String> {
