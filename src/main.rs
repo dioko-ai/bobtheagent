@@ -639,7 +639,7 @@ fn run_app(
                             .find(|line| !line.trim().is_empty())
                             .map(|line| format_internal_master_update(line))
                             .unwrap_or_else(|| {
-                                "Here's what just happened: a sub-agent completed work.".to_string()
+                                "A sub-agent completed work.".to_string()
                             });
                         app.push_agent_message(format!("Agent: {summary}"));
                         master_report_transcript.clear();
@@ -2934,15 +2934,15 @@ fn normalize_test_command(value: Option<String>) -> Option<String> {
 fn format_internal_master_update(line: &str) -> String {
     let trimmed = line.trim();
     if trimmed.is_empty() {
-        return "Here's what just happened: a sub-agent completed work.".to_string();
+        return "A sub-agent completed work.".to_string();
     }
-    if trimmed
-        .to_lowercase()
-        .starts_with("here's what just happened:")
-    {
-        return trimmed.to_string();
+    let normalized = trimmed.to_lowercase();
+    if normalized.starts_with("here's what just happened:") {
+        return trimmed["Here's what just happened:".len()..]
+            .trim_start()
+            .to_string();
     }
-    format!("Here's what just happened: {trimmed}")
+    trimmed.to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

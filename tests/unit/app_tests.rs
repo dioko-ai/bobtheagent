@@ -452,10 +452,9 @@ fn worker_completion_updates_chat_and_tree() {
 
     let started = app.start_next_worker_job().expect("second job");
     assert_eq!(started.role, WorkerRole::Auditor);
-    app.on_worker_output("AUDIT_RESULT: PASS".to_string());
-    app.on_worker_output("No issues found".to_string());
+    app.on_worker_output("PASS".to_string());
     let new_entries = app.on_worker_completed(true, 0);
-    assert!(!new_entries.is_empty());
+    assert!(new_entries.is_empty());
 
     let started = app.start_next_worker_job().expect("third job");
     assert_eq!(started.role, WorkerRole::TestWriter);
@@ -563,7 +562,7 @@ fn context_report_prompt_mentions_updates() {
         "Implementor completed pass.".to_string(),
         "Audit found no issues.".to_string(),
     ]);
-    assert!(prompt.contains("Here's what just happened:"));
+    assert!(prompt.contains("Rolling task context"));
     assert!(prompt.contains("Do not make any file changes"));
     assert!(prompt.contains("Implementor completed pass."));
     assert!(prompt.contains("Audit found no issues."));

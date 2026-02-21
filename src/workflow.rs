@@ -679,13 +679,11 @@ impl Workflow {
                 pass,
                 ..
             } => {
-                self.push_context(make_context_summary(
-                    "FinalAudit",
-                    &self.task_title(job.top_task_id),
-                    &transcript,
-                    success,
-                ));
-                let explicit_pass = success && parse_audit_result_token(&transcript) == Some(true);
+                let explicit_pass = success
+                    && matches!(
+                        parse_audit_result_token(&transcript),
+                        Some(AuditResultToken::Pass)
+                    );
                 if explicit_pass {
                     self.exhausted_final_audits.remove(&final_audit_id);
                     self.set_status(final_audit_id, TaskStatus::Done);
@@ -965,10 +963,10 @@ impl Workflow {
                  {}\n\
                  Response protocol (required):\n\
                  - First line must be exactly one of:\n\
-                   AUDIT_RESULT: PASS\n\
-                   AUDIT_RESULT: FAIL\n\
-                 - Then provide concise findings. If PASS, include a brief rationale.\n\
-                 - If FAIL, include concrete issues and suggested fixes.",
+                   PASS\n\
+                   FAIL\n\
+                 - PASS: no additional text after the token.\n\
+                 - FAIL: include one or more lines of findings and rationale after the token.",
                     self.context_block(),
                     self.task_tree_compact(),
                     tests_policy,
@@ -1530,17 +1528,10 @@ impl Workflow {
 
         if impl_done && test_done && !already_done {
             self.set_status(top_task_id, TaskStatus::Done);
-            if self.tests_mode_enabled && requires_test_writer {
-                self.push_context(format!(
-                    "Task \"{}\" is complete after implementation, audit, test writing, and deterministic test runs all finished successfully.",
-                    self.task_title(top_task_id)
-                ));
-            } else {
-                self.push_context(format!(
-                    "Task \"{}\" is complete after implementation and audit finished successfully.",
-                    self.task_title(top_task_id)
-                ));
-            }
+            let task_title = self.task_title(top_task_id);
+            self.push_context(format!(
+                "Task \"{task_title}\" records what was changed and why this branch can continue as context for downstream work."
+            ));
             if self.tests_mode_enabled && requires_test_writer {
                 messages.push(format!(
                     "System: Task #{} completed after implementation and testing branches converged.",
@@ -2267,28 +2258,6 @@ fn task_status_to_file(status: TaskStatus) -> PlannerTaskStatusFile {
     }
 }
 
-fn make_context_summary(
-    role: &str,
-    task_title: &str,
-    transcript: &[String],
-    success: bool,
-) -> String {
-    let preview = transcript
-        .iter()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .map(|line| line.trim().to_string())
-        .unwrap_or_else(|| "No detailed output was captured.".to_string());
-    format!(
-        "{role} worked on \"{task_title}\" and {}. Key result: {preview}.",
-        if success {
-            "finished its pass successfully"
-        } else {
-            "ended with a failure state"
-        }
-    )
-}
-
 fn extract_changed_files_summary(transcript: &[String]) -> String {
     let merged = transcript.join("\n");
     if let Some(summary) = extract_tagged_block(&merged, FILES_CHANGED_BEGIN, FILES_CHANGED_END) {
@@ -2330,7 +2299,7 @@ fn audit_strictness_policy(pass: u8) -> &'static str {
 
 fn audit_detects_issues(transcript: &[String]) -> bool {
     if let Some(protocol_result) = parse_audit_result_token(transcript) {
-        return !protocol_result;
+        return !matches!(protocol_result, AuditResultToken::Pass);
     }
     let text = transcript.join("\n").to_lowercase();
     if text.contains("no issues found") || text.contains("no findings") {
@@ -2343,21 +2312,63 @@ fn audit_detects_issues(transcript: &[String]) -> bool {
         || text.contains("needs change")
 }
 
-fn parse_audit_result_token(transcript: &[String]) -> Option<bool> {
-    for line in transcript {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+#[derive(Debug, PartialEq)]
+enum AuditResultToken {
+    Pass,
+    Fail,
+    InvalidProtocol,
+}
+
+fn parse_audit_result_token(transcript: &[String]) -> Option<AuditResultToken> {
+    let lines: Vec<&str> = transcript
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect();
+
+    let Some(first) = lines.first() else {
+        return None;
+    };
+
+    match first.to_ascii_uppercase().as_str() {
+        "PASS" => {
+            if lines.len() == 1 {
+                Some(AuditResultToken::Pass)
+            } else {
+                Some(AuditResultToken::InvalidProtocol)
+            }
         }
-        let upper = trimmed.to_ascii_uppercase();
-        if upper == "AUDIT_RESULT: PASS" {
-            return Some(true);
+        "FAIL" => {
+            if lines.len() > 1 {
+                Some(AuditResultToken::Fail)
+            } else {
+                Some(AuditResultToken::InvalidProtocol)
+            }
         }
-        if upper == "AUDIT_RESULT: FAIL" {
-            return Some(false);
-        }
+        _ => None,
     }
-    None
+}
+
+fn make_context_summary(
+    role: &str,
+    task_title: &str,
+    transcript: &[String],
+    success: bool,
+) -> String {
+    let preview = transcript
+        .iter()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.trim().to_string())
+        .unwrap_or_else(|| "No detailed output was captured.".to_string());
+    format!(
+        "{role} worked on \"{task_title}\" and {}. Key result: {preview}.",
+        if success {
+            "finished its pass successfully"
+        } else {
+            "ended with a failure state"
+        }
+    )
 }
 
 fn default_generated_details(kind: TaskKind) -> &'static str {

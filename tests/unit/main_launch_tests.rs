@@ -1821,8 +1821,7 @@ fn integration_happy_path_persists_and_reloads_cleanly() {
                     || prompt.contains("reviewing test-writing output")
                     || prompt.contains("final audit sub-agent")
                 {
-                    app.on_worker_output("AUDIT_RESULT: PASS".to_string());
-                    app.on_worker_output("No issues found".to_string());
+                    app.on_worker_output("PASS".to_string());
                 } else {
                     app.on_worker_output("completed".to_string());
                 }
@@ -1879,24 +1878,21 @@ fn integration_retry_paths_recover_without_exhausted_failures() {
                 if prompt.contains("reviewing implementation output") {
                     if impl_audit_failures_left > 0 {
                         impl_audit_failures_left = impl_audit_failures_left.saturating_sub(1);
-                        app.on_worker_output("AUDIT_RESULT: FAIL".to_string());
-                        app.on_worker_output("Critical blocker still present".to_string());
+                        app.on_worker_output("FAIL".to_string());
+                        app.on_worker_output("- Critical blocker still present".to_string());
                     } else {
-                        app.on_worker_output("AUDIT_RESULT: PASS".to_string());
-                        app.on_worker_output("No issues found".to_string());
+                        app.on_worker_output("PASS".to_string());
                     }
                 } else if prompt.contains("reviewing test-writing output") {
                     if test_audit_failures_left > 0 {
                         test_audit_failures_left = test_audit_failures_left.saturating_sub(1);
-                        app.on_worker_output("AUDIT_RESULT: FAIL".to_string());
-                        app.on_worker_output("Coverage gap remains".to_string());
+                        app.on_worker_output("FAIL".to_string());
+                        app.on_worker_output("- Coverage gap remains".to_string());
                     } else {
-                        app.on_worker_output("AUDIT_RESULT: PASS".to_string());
-                        app.on_worker_output("No issues found".to_string());
+                        app.on_worker_output("PASS".to_string());
                     }
                 } else if prompt.contains("final audit sub-agent") {
-                    app.on_worker_output("AUDIT_RESULT: PASS".to_string());
-                    app.on_worker_output("No issues found".to_string());
+                    app.on_worker_output("PASS".to_string());
                 } else {
                     app.on_worker_output("completed".to_string());
                 }
@@ -3020,11 +3016,11 @@ fn slash_start_command_detection_only_matches_slash_form() {
 fn formats_internal_master_update_with_standard_prefix() {
     assert_eq!(
         format_internal_master_update("completed implementor pass"),
-        "Here's what just happened: completed implementor pass"
+        "completed implementor pass"
     );
     assert_eq!(
         format_internal_master_update("Here's what just happened: done"),
-        "Here's what just happened: done"
+        "done"
     );
 }
 

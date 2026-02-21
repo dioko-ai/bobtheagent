@@ -342,7 +342,7 @@ impl App {
         format!(
             "Rolling task context has new updates:\n{}\n\
              Read these updates and respond with exactly one brief user-facing sentence.\n\
-             The sentence must start with: \"Here's what just happened:\"\n\
+             Keep the report brief and directly state the concrete progress and outcomes.\n\
              Focus on concrete progress and outcomes.\n\
              Do not emit TASK_OPS or modify planner state for this update.\n\
              Do not make any file changes. Simply return the message.",

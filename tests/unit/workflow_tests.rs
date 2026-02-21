@@ -252,8 +252,7 @@ fn complete_non_final_branches_and_start_final_audit(wf: &mut Workflow) -> Start
 
     let auditor = wf.start_next_job().expect("auditor");
     assert_eq!(auditor.role, WorkerRole::Auditor);
-    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
-    wf.append_active_output("No issues found".to_string());
+    wf.append_active_output("PASS".to_string());
     wf.finish_active_job(true, 0);
 
     let test_writer = wf.start_next_job().expect("test writer");
@@ -470,8 +469,7 @@ fn top_task_does_not_complete_until_all_implementor_branches_are_done() {
 
     let auditor = wf.start_next_job().expect("auditor");
     assert_eq!(auditor.role, WorkerRole::Auditor);
-    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
-    wf.append_active_output("No issues found".to_string());
+    wf.append_active_output("PASS".to_string());
     wf.finish_active_job(true, 0);
 
     let snapshot = wf.planner_tasks_for_file();
@@ -630,11 +628,10 @@ fn top_level_tasks_run_sequentially_in_order() {
             WorkerRole::Implementor => wf.append_active_output("implemented".to_string()),
             WorkerRole::TestWriter => wf.append_active_output("wrote tests".to_string()),
             WorkerRole::Auditor => {
-                wf.append_active_output("AUDIT_RESULT: PASS".to_string());
-                wf.append_active_output("No issues found".to_string());
+                wf.append_active_output("PASS".to_string());
             }
             WorkerRole::TestRunner => wf.append_active_output("all passed".to_string()),
-            WorkerRole::FinalAudit => wf.append_active_output("No issues found".to_string()),
+            WorkerRole::FinalAudit => wf.append_active_output("PASS".to_string()),
         }
         let messages = wf.finish_active_job(true, 0);
         if messages
@@ -664,8 +661,7 @@ fn deterministic_test_runner_loops_back_to_test_writer_on_failure() {
 
     let auditor = wf.start_next_job().expect("auditor");
     assert_eq!(auditor.role, WorkerRole::Auditor);
-    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
-    wf.append_active_output("No issues found".to_string());
+    wf.append_active_output("PASS".to_string());
     wf.finish_active_job(true, 0);
 
     let _ = wf.start_next_job().expect("test writer");
@@ -727,8 +723,7 @@ fn missing_test_command_keeps_required_test_runner_branch_incomplete() {
 
     let auditor = wf.start_next_job().expect("auditor");
     assert_eq!(auditor.role, WorkerRole::Auditor);
-    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
-    wf.append_active_output("No issues found".to_string());
+    wf.append_active_output("PASS".to_string());
     wf.finish_active_job(true, 0);
 
     let _ = wf.start_next_job().expect("test writer");
@@ -843,8 +838,7 @@ fn test_writer_child_auditor_runs_before_test_runner_when_present() {
         }
         JobRun::DeterministicTestRun => panic!("expected auditor prompt"),
     }
-    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
-    wf.append_active_output("No issues found".to_string());
+    wf.append_active_output("PASS".to_string());
     wf.finish_active_job(true, 0);
 
     let runner = wf.start_next_job().expect("test runner");
@@ -924,8 +918,8 @@ fn failing_test_writer_child_auditor_queues_test_writer_retry() {
     wf.finish_active_job(true, 0);
 
     let _ = wf.start_next_job().expect("test-writer auditor");
-    wf.append_active_output("AUDIT_RESULT: FAIL".to_string());
-    wf.append_active_output("Missing edge-case assertions".to_string());
+    wf.append_active_output("FAIL".to_string());
+    wf.append_active_output("- Missing edge-case assertions".to_string());
     let messages = wf.finish_active_job(true, 0);
     assert!(
         messages
@@ -999,8 +993,7 @@ fn multiple_implementor_audits_run_sequentially() {
 
     let first_audit = wf.start_next_job().expect("first audit");
     assert_eq!(first_audit.role, WorkerRole::Auditor);
-    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
-    wf.append_active_output("No issues found".to_string());
+    wf.append_active_output("PASS".to_string());
     wf.finish_active_job(true, 0);
 
     let second_audit = wf.start_next_job().expect("second audit");
@@ -1061,8 +1054,8 @@ fn exhausted_implementor_audit_moves_to_next_audit() {
 
     for pass in 1..=4 {
         let _ = wf.start_next_job().expect("audit");
-        wf.append_active_output("AUDIT_RESULT: FAIL".to_string());
-        wf.append_active_output(format!("critical issue pass {pass}"));
+        wf.append_active_output("FAIL".to_string());
+        wf.append_active_output(format!("- critical issue pass {pass}"));
         wf.finish_active_job(true, 0);
         if pass < 4 {
             let _ = wf.start_next_job().expect("implementor retry");
@@ -1094,8 +1087,8 @@ fn started_jobs_keep_same_parent_context_key_per_branch() {
         .clone()
         .expect("auditor context key");
     assert_ne!(auditor_key, impl_key);
-    wf.append_active_output("AUDIT_RESULT: FAIL".to_string());
-    wf.append_active_output("Fix needed".to_string());
+    wf.append_active_output("FAIL".to_string());
+    wf.append_active_output("- Fix needed".to_string());
     wf.finish_active_job(true, 0);
 
     let implementor_retry = wf.start_next_job().expect("implementor retry");
@@ -1111,8 +1104,7 @@ fn started_jobs_keep_same_parent_context_key_per_branch() {
         auditor_retry.parent_context_key.as_deref(),
         Some(auditor_key.as_str())
     );
-    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
-    wf.append_active_output("No issues found".to_string());
+    wf.append_active_output("PASS".to_string());
     wf.finish_active_job(true, 0);
 
     let test_writer = wf.start_next_job().expect("test writer");
@@ -1141,8 +1133,7 @@ fn test_fix_loop_stops_after_five_failed_test_runs() {
     wf.finish_active_job(true, 0);
 
     let _ = wf.start_next_job().expect("auditor");
-    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
-    wf.append_active_output("No issues found".to_string());
+    wf.append_active_output("PASS".to_string());
     wf.finish_active_job(true, 0);
 
     let mut last_messages = Vec::new();
@@ -1239,8 +1230,8 @@ fn implementor_changed_files_summary_is_forwarded_to_auditor_prompt() {
     match auditor.run {
         JobRun::AgentPrompt(prompt) => {
             assert!(prompt.contains("Implementor changed-files summary"));
-            assert!(prompt.contains("AUDIT_RESULT: PASS"));
-            assert!(prompt.contains("AUDIT_RESULT: FAIL"));
+            assert!(prompt.contains("PASS"));
+            assert!(prompt.contains("FAIL"));
             assert!(prompt.contains("- src/app.rs: added state transition for command handling"));
             assert!(prompt.contains("- src/ui.rs: updated rendering path for task block layout"));
         }
@@ -1249,9 +1240,10 @@ fn implementor_changed_files_summary_is_forwarded_to_auditor_prompt() {
 }
 
 #[test]
-fn audit_result_token_pass_overrides_issue_keywords() {
-    assert!(!audit_detects_issues(&[
-        "AUDIT_RESULT: PASS".to_string(),
+fn audit_result_pass_is_rejected_with_extra_text() {
+    assert!(!audit_detects_issues(&["PASS".to_string()]));
+    assert!(audit_detects_issues(&[
+        "PASS".to_string(),
         "Issue: wording only".to_string(),
     ]));
 }
@@ -1259,16 +1251,42 @@ fn audit_result_token_pass_overrides_issue_keywords() {
 #[test]
 fn audit_result_token_fail_overrides_no_issues_phrase() {
     assert!(audit_detects_issues(&[
-        "AUDIT_RESULT: FAIL".to_string(),
-        "No issues found".to_string(),
+        "FAIL".to_string(),
+        "- No issues found".to_string(),
     ]));
 }
 
 #[test]
-fn audit_result_token_is_detected_even_after_preamble_lines() {
-    assert!(!audit_detects_issues(&[
+fn audit_result_fail_requires_additional_content() {
+    assert!(audit_detects_issues(&["FAIL".to_string(), "Needs change".to_string()]));
+    assert!(audit_detects_issues(&["FAIL".to_string(), "- Add a null check".to_string()]));
+}
+
+#[test]
+fn audit_result_token_fails_with_any_additional_content() {
+    assert!(matches!(
+        parse_audit_result_token(&["FAIL".to_string(), "Needs change".to_string()]),
+        Some(AuditResultToken::Fail)
+    ));
+    assert!(matches!(
+        parse_audit_result_token(&["FAIL".to_string(), "- Add a null check".to_string()]),
+        Some(AuditResultToken::Fail)
+    ));
+}
+
+#[test]
+fn audit_result_token_fails_without_additional_content_is_invalid() {
+    assert_eq!(
+        parse_audit_result_token(&["FAIL".to_string()]),
+        Some(AuditResultToken::InvalidProtocol)
+    );
+}
+
+#[test]
+fn audit_result_token_is_rejected_when_not_first_line() {
+    assert!(audit_detects_issues(&[
         "Summary of findings".to_string(),
-        "AUDIT_RESULT: PASS".to_string(),
+        "PASS".to_string(),
         "Issue: wording only".to_string(),
     ]));
 }
@@ -1313,8 +1331,8 @@ fn audit_retry_limit_stops_after_four_failed_audits() {
             }
             JobRun::DeterministicTestRun => panic!("expected auditor prompt"),
         }
-        wf.append_active_output("AUDIT_RESULT: FAIL".to_string());
-        wf.append_active_output("Critical blocker still present".to_string());
+        wf.append_active_output("FAIL".to_string());
+        wf.append_active_output("- Critical blocker still present".to_string());
         last_messages = wf.finish_active_job(true, 0);
 
         if audit_pass < 4 {
@@ -1409,8 +1427,7 @@ fn implementor_owned_test_runner_runs_after_audits_when_present() {
 
     let auditor = wf.start_next_job().expect("auditor");
     assert_eq!(auditor.role, WorkerRole::Auditor);
-    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
-    wf.append_active_output("No issues found".to_string());
+    wf.append_active_output("PASS".to_string());
     wf.finish_active_job(true, 0);
 
     let existing_runner = wf.start_next_job().expect("existing runner");
@@ -1478,8 +1495,7 @@ fn implementor_owned_test_runner_exhaustion_records_failure_and_continues_to_nex
 
     let auditor = wf.start_next_job().expect("auditor");
     assert_eq!(auditor.role, WorkerRole::Auditor);
-    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
-    wf.append_active_output("No issues found".to_string());
+    wf.append_active_output("PASS".to_string());
     wf.finish_active_job(true, 0);
 
     for pass in 1..=5 {
@@ -1524,7 +1540,7 @@ fn top_task_done_requires_impl_and_test_branches() {
     wf.finish_active_job(true, 0);
 
     let _ = wf.start_next_job().expect("auditor");
-    wf.append_active_output("No issues found".to_string());
+    wf.append_active_output("PASS".to_string());
     wf.finish_active_job(true, 0);
 
     let tree = wf.right_pane_lines().join("\n");
@@ -2397,8 +2413,7 @@ fn worker_prompts_prepend_task_docs_and_web_read_instruction() {
 
         match job.role {
             WorkerRole::Auditor | WorkerRole::FinalAudit => {
-                wf.append_active_output("AUDIT_RESULT: PASS".to_string());
-                wf.append_active_output("No issues found".to_string());
+                wf.append_active_output("PASS".to_string());
             }
             WorkerRole::TestRunner => {
                 wf.append_active_output("all passed".to_string());
@@ -2648,8 +2663,7 @@ fn first_implementor_pass_enqueues_implementor_auditor_before_test_writer() {
 
     let second = wf.start_next_job().expect("implementor auditor");
     assert_eq!(second.role, WorkerRole::Auditor);
-    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
-    wf.append_active_output("looks good".to_string());
+    wf.append_active_output("PASS".to_string());
     wf.finish_active_job(true, 0);
 
     let third = wf.start_next_job().expect("implementor test runner");
@@ -2877,7 +2891,7 @@ fn final_audit_runs_after_non_final_tasks_complete() {
     wf.finish_active_job(true, 0);
 
     let _ = wf.start_next_job().expect("auditor");
-    wf.append_active_output("No issues found".to_string());
+    wf.append_active_output("PASS".to_string());
     wf.finish_active_job(true, 0);
 
     let _ = wf.start_next_job().expect("test runner");
@@ -2894,14 +2908,14 @@ fn final_audit_audit_result_fail_keeps_task_needs_changes_even_on_exit_zero() {
     seed_single_default_task_with_final_audit(&mut wf, "Do work");
     let _ = complete_non_final_branches_and_start_final_audit(&mut wf);
 
-    wf.append_active_output("AUDIT_RESULT: FAIL".to_string());
-    wf.append_active_output("Cross-task issue still unresolved".to_string());
+    wf.append_active_output("FAIL".to_string());
+    wf.append_active_output("- Cross-task issue still unresolved".to_string());
     let messages = wf.finish_active_job(true, 0);
     assert!(
         messages
             .iter()
             .any(|m| m.contains("did not explicitly pass; retry queued")),
-        "expected retry message when final audit returns AUDIT_RESULT: FAIL"
+        "expected retry message when final audit returns FAIL"
     );
 
     let snapshot = wf.planner_tasks_for_file();
@@ -2919,8 +2933,8 @@ fn final_audit_requires_explicit_pass_token_to_complete() {
     let first_final_audit = complete_non_final_branches_and_start_final_audit(&mut wf);
     match first_final_audit.run {
         JobRun::AgentPrompt(prompt) => {
-            assert!(prompt.contains("AUDIT_RESULT: PASS"));
-            assert!(prompt.contains("AUDIT_RESULT: FAIL"));
+            assert!(prompt.contains("PASS"));
+            assert!(prompt.contains("FAIL"));
             assert!(prompt.contains(
                 "Tests mode policy (ON): include cross-task test adequacy in holistic risk assessment when relevant."
             ));
@@ -2931,27 +2945,14 @@ fn final_audit_requires_explicit_pass_token_to_complete() {
         JobRun::DeterministicTestRun => panic!("expected final audit prompt"),
     }
 
-    wf.append_active_output("No issues found".to_string());
+    wf.append_active_output("PASS".to_string());
     wf.finish_active_job(true, 0);
-    let first_snapshot = wf.planner_tasks_for_file();
-    let first_status = first_snapshot
+    let final_snapshot = wf.planner_tasks_for_file();
+    let final_status = final_snapshot
         .iter()
         .find(|entry| entry.id == "fa")
         .map(|entry| entry.status);
-    assert_eq!(first_status, Some(PlannerTaskStatusFile::NeedsChanges));
-
-    let retry_final_audit = wf.start_next_job().expect("final audit retry");
-    assert_eq!(retry_final_audit.role, WorkerRole::FinalAudit);
-    wf.append_active_output("AUDIT_RESULT: PASS".to_string());
-    wf.append_active_output("No issues found".to_string());
-    wf.finish_active_job(true, 0);
-
-    let second_snapshot = wf.planner_tasks_for_file();
-    let second_status = second_snapshot
-        .iter()
-        .find(|entry| entry.id == "fa")
-        .map(|entry| entry.status);
-    assert_eq!(second_status, Some(PlannerTaskStatusFile::Done));
+    assert_eq!(final_status, Some(PlannerTaskStatusFile::Done));
 }
 
 #[test]
@@ -3026,8 +3027,8 @@ fn final_audit_retry_limit_stops_requeue_and_records_failure() {
 
     let mut last_messages = Vec::new();
     for pass in 1..=MAX_FINAL_AUDIT_RETRIES {
-        wf.append_active_output("AUDIT_RESULT: FAIL".to_string());
-        wf.append_active_output(format!("cross-task blocker remains on pass {pass}"));
+        wf.append_active_output("FAIL".to_string());
+        wf.append_active_output(format!("- cross-task blocker remains on pass {pass}"));
         last_messages = wf.finish_active_job(true, 0);
 
         if pass < MAX_FINAL_AUDIT_RETRIES {
@@ -3055,6 +3056,91 @@ fn final_audit_retry_limit_stops_requeue_and_records_failure() {
         .find(|entry| entry.id == "fa")
         .map(|entry| entry.status);
     assert_eq!(final_status, Some(PlannerTaskStatusFile::NeedsChanges));
+}
+
+#[test]
+fn rolling_context_records_progress_and_why() {
+    let mut wf = Workflow::default();
+    seed_single_default_task(&mut wf, "Deliver auth flow");
+    wf.set_tests_mode_enabled(true);
+    wf.start_execution();
+
+    let _ = wf.start_next_job().expect("implementor");
+    wf.append_active_output("implemented".to_string());
+    wf.finish_active_job(true, 0);
+
+    let _ = wf.start_next_job().expect("test writer");
+    wf.append_active_output("wrote tests".to_string());
+    wf.finish_active_job(true, 0);
+
+    let _ = wf.start_next_job().expect("auditor");
+    wf.append_active_output("PASS".to_string());
+    wf.finish_active_job(true, 0);
+
+    let _ = wf.start_next_job().expect("test runner");
+    wf.append_active_output("all passed".to_string());
+    wf.finish_active_job(true, 0);
+
+    let entry = wf
+        .rolling_context_entries()
+        .last()
+        .expect("top task should add rolling context")
+        .to_owned();
+    assert!(entry.contains("Task \"Deliver auth flow\""));
+    assert!(entry.contains("records what was changed"));
+    assert!(entry.contains("downstream work"));
+}
+
+#[test]
+fn test_runner_and_audit_completions_do_not_each_create_rolling_context_entries() {
+    let mut wf = Workflow::default();
+    seed_single_default_task(&mut wf, "Deliver API pagination");
+    wf.start_execution();
+
+    let context_len_before = wf.rolling_context_entries().len();
+
+    let _ = wf.start_next_job().expect("implementor");
+    wf.append_active_output("implemented".to_string());
+    wf.finish_active_job(true, 0);
+    assert_eq!(wf.rolling_context_entries().len(), context_len_before + 1);
+
+    let second = wf.start_next_job().expect("next role after implementor");
+    assert_eq!(second.role, WorkerRole::Auditor);
+    wf.append_active_output("PASS".to_string());
+    wf.finish_active_job(true, 0);
+    assert_eq!(wf.rolling_context_entries().len(), context_len_before + 1);
+
+    let third = wf.start_next_job().expect("next role after auditor");
+    assert_eq!(third.role, WorkerRole::TestWriter);
+    wf.append_active_output("wrote tests".to_string());
+    wf.finish_active_job(true, 0);
+    assert_eq!(wf.rolling_context_entries().len(), context_len_before + 2);
+
+    let _ = wf.start_next_job().expect("test runner");
+    wf.append_active_output("all passed".to_string());
+    wf.finish_active_job(true, 0);
+    assert_eq!(wf.rolling_context_entries().len(), context_len_before + 3);
+}
+
+#[test]
+fn final_audit_completion_does_not_add_rolling_context_entry() {
+    let mut wf = Workflow::default();
+    seed_single_default_task_with_final_audit(&mut wf, "Do work");
+    let _ = complete_non_final_branches_and_start_final_audit(&mut wf);
+    let context_count_before = wf.rolling_context_entries().len();
+
+    wf.append_active_output("PASS".to_string());
+    wf.finish_active_job(true, 0);
+
+    let context_count_after = wf.rolling_context_entries().len();
+    assert_eq!(
+        context_count_after,
+        context_count_before,
+        "final audit completion should not add rolling context"
+    );
+    assert!(
+        !wf.rolling_context_entries().iter().any(|entry| entry.contains("FinalAudit"))
+    );
 }
 
 #[test]

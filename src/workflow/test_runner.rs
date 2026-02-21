@@ -1,5 +1,5 @@
 use super::Workflow;
-use super::{TaskStatus, make_context_summary, test_runner_feedback};
+use super::{TaskStatus, test_runner_feedback};
 
 pub(crate) fn on_writer_completion(
     workflow: &mut Workflow,
@@ -13,12 +13,6 @@ pub(crate) fn on_writer_completion(
     messages: &mut Vec<String>,
 ) {
     workflow.set_status(test_runner_id, TaskStatus::Done);
-    workflow.push_context(make_context_summary(
-        "TestRunner",
-        &workflow.task_title(top_task_id),
-        transcript,
-        success,
-    ));
 
     if success {
         workflow.set_status(test_writer_id, TaskStatus::Done);
@@ -104,13 +98,6 @@ pub(crate) fn on_implementor_completion(
     code: i32,
     messages: &mut Vec<String>,
 ) {
-    workflow.push_context(make_context_summary(
-        "TestRunner",
-        &workflow.task_title(top_task_id),
-        transcript,
-        success,
-    ));
-
     if success {
         workflow.set_status(test_runner_id, TaskStatus::Done);
         workflow.set_status(implementor_id, TaskStatus::Done);

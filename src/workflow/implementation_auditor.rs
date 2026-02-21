@@ -1,7 +1,7 @@
 use super::WorkerJob;
 use super::Workflow;
 use super::{
-    MAX_AUDIT_RETRIES, TaskStatus, audit_detects_issues, audit_feedback, make_context_summary,
+    MAX_AUDIT_RETRIES, TaskStatus, audit_detects_issues, audit_feedback,
 };
 
 pub(crate) fn build_prompt(
@@ -34,10 +34,11 @@ pub(crate) fn build_prompt(
          Strictness policy for this audit pass:\n{}\n\
          Response protocol (required):\n\
          - First line must be exactly one of:\n\
-           AUDIT_RESULT: PASS\n\
-           AUDIT_RESULT: FAIL\n\
-         - Then provide concise findings. If PASS, include a brief rationale.\n\
-         - If FAIL, include concrete issues and suggested fixes. On pass 4, only FAIL for truly critical blockers that would prevent the broader plan from running.",
+           PASS\n\
+           FAIL\n\
+         - PASS: no additional text after the token.\n\
+         - FAIL: include one or more lines of findings and rationale after the token.\n\
+         - On pass 4, only FAIL for truly critical blockers that would prevent the broader plan from running.",
         workflow.task_title(top_task_id),
         workflow.node_title(implementor_id, "Implementation"),
         workflow.node_details(implementor_id),
@@ -69,13 +70,6 @@ pub(crate) fn on_completion(
     code: i32,
     messages: &mut Vec<String>,
 ) {
-    workflow.push_context(make_context_summary(
-        "Auditor",
-        &workflow.task_title(top_task_id),
-        transcript,
-        success,
-    ));
-
     let issues = !success || audit_detects_issues(transcript);
     if issues {
         workflow.set_status(implementor_id, TaskStatus::NeedsChanges);

@@ -156,11 +156,12 @@ impl CodexAdapter {
         let program = config.program.clone();
         let tx = self.event_tx.clone();
         let session_id = self.session_id.clone();
+        let session_id_snapshot = self.saved_session_id();
         thread::spawn(move || {
             let prompt = apply_global_prompt_preamble(prompt, &config.program);
             let mut command = Command::new(&config.program);
             if config.persistent_session {
-                let known_session = session_id.lock().ok().and_then(|g| g.clone());
+                let known_session = session_id_snapshot;
                 if let Some(existing_session) = known_session {
                     command
                         .args(build_resume_prompt_args(&config, &existing_session))
@@ -259,9 +260,7 @@ impl CodexAdapter {
     }
 
     pub fn reset_session(&self) {
-        if let Ok(mut lock) = self.session_id.lock() {
-            *lock = None;
-        }
+        self.set_saved_session_id(None);
     }
 
     pub fn saved_session_id(&self) -> Option<String> {
